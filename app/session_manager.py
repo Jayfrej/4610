@@ -144,7 +144,45 @@ class SessionManager:
             
             # Copy profile source to instance directory
             logger.info(f"[CREATE_INSTANCE] Copying profile from {self.profile_source} to {instance_path}")
-            shutil.copytree(self.profile_source, instance_path)
+            
+            # Copy with more thorough method
+            try:
+                shutil.copytree(self.profile_source, instance_path, dirs_exist_ok=True)
+                
+                # Verify critical directories exist
+                critical_dirs = ['profiles', 'config', 'MQL5']
+                for dir_name in critical_dirs:
+                    dir_path = os.path.join(instance_path, dir_name)
+                    if not os.path.exists(dir_path):
+                        os.makedirs(dir_path, exist_ok=True)
+                        logger.info(f"[CREATE_INSTANCE] Created missing directory: {dir_name}")
+                
+                # Verify Default profile exists
+                default_profile_path = os.path.join(instance_path, 'profiles', 'Default')
+                if not os.path.exists(default_profile_path):
+                    # Try to copy from source Default profile
+                    source_default = os.path.join(self.profile_source, 'profiles', 'Default')
+                    if os.path.exists(source_default):
+                        shutil.copytree(source_default, default_profile_path, dirs_exist_ok=True)
+                        logger.info("[CREATE_INSTANCE] Copied Default profile")
+                    else:
+                        # Create basic Default profile structure
+                        os.makedirs(default_profile_path, exist_ok=True)
+                        logger.warning("[CREATE_INSTANCE] Created empty Default profile - please configure MT5 manually")
+                
+                # Verify config files exist
+                config_files = ['servers.dat']
+                for config_file in config_files:
+                    source_file = os.path.join(self.profile_source, 'config', config_file)
+                    dest_file = os.path.join(instance_path, 'config', config_file)
+                    
+                    if os.path.exists(source_file) and not os.path.exists(dest_file):
+                        shutil.copy2(source_file, dest_file)
+                        logger.info(f"[CREATE_INSTANCE] Copied config file: {config_file}")
+                
+            except Exception as copy_error:
+                logger.error(f"[CREATE_INSTANCE] Copy failed: {str(copy_error)}")
+                return False
             
             # Add account to database
             with sqlite3.connect(self.db_path) as conn:
@@ -177,11 +215,18 @@ class SessionManager:
                 logger.error(f"[START_INSTANCE] Instance directory not found: {instance_path}")
                 return False
             
-            # Build command to start MT5
+            # Check if Default profile exists
+            default_profile_path = os.path.join(instance_path, 'profiles', 'Default')
+            if not os.path.exists(default_profile_path):
+                logger.warning(f"[START_INSTANCE] Default profile not found, creating basic profile")
+                os.makedirs(default_profile_path, exist_ok=True)
+            
+            # Build command to start MT5 with Default profile
             cmd = [
                 self.mt5_path,
                 '/portable',
-                f'/datapath:{instance_path}'
+                f'/datapath:{instance_path}',
+                '/profile:Default'  # Force load Default profile
             ]
             
             logger.info(f"[START_INSTANCE] Starting MT5 for account {account}")
@@ -191,7 +236,9 @@ class SessionManager:
             process = subprocess.Popen(
                 cmd,
                 cwd=instance_path,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
             )
             
             pid = process.pid
