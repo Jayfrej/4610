@@ -24,12 +24,21 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here')
 
-# Initialize rate limiter
-limiter = Limiter(
-    app,
-    key_func=get_remote_address,
-    default_limits=["100 per hour"]
-)
+# Initialize rate limiter (alternative approach)
+try:
+    # Try new Flask-Limiter API
+    limiter = Limiter(
+        key_func=get_remote_address,
+        default_limits=["100 per hour"]
+    )
+    limiter.init_app(app)
+except TypeError:
+    # Fallback to old API
+    limiter = Limiter(
+        app,
+        key_func=get_remote_address,
+        default_limits=["100 per hour"]
+    )
 
 # Initialize components
 session_manager = SessionManager()
@@ -45,7 +54,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler('logs/trading_bot.log'),
+        logging.FileHandler('logs/trading_bot.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -88,7 +97,7 @@ def monitor_instances():
                 # Update status if changed
                 if old_status != new_status:
                     session_manager.update_account_status(account, new_status)
-                    logger.info(f"[STATUS_CHANGE] Account {account}: {old_status} → {new_status}")
+                    logger.info(f"[STATUS_CHANGE] Account {account}: {old_status} -> {new_status}")
                     
                     # Send email notification
                     if new_status == 'Offline' and old_status == 'Online':
