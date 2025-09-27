@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MT5 Trading Bot - Multi Account Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1><i class="fas fa-robot"></i> MT5 Trading Bot</h1>
+                <p>Multi-Account Webhook Manager</p>
+            </div>
+            <div class="header-actions">
+                <button id="refreshBtn" class="btn btn-secondary" title="Refresh Data">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+                <button id="webhookBtn" class="btn btn-primary" title="Copy Webhook URL">
+                    <i class="fas fa-link"></i> Copy Webhook
+                </button>
+            </div>
+        </header>
+
+        <!-- Stats Cards -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-users"></i>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-number" id="totalAccounts">0</div>
+                    <div class="stat-label">Total Accounts</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon online">
+                    <i class="fas fa-circle"></i>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-number" id="onlineAccounts">0</div>
+                    <div class="stat-label">Online</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon offline">
+                    <i class="fas fa-circle"></i>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-number" id="offlineAccounts">0</div>
+                    <div class="stat-label">Offline</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-number" id="lastUpdate">--:--</div>
+                    <div class="stat-label">Last Update</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Account Form -->
+        <div class="card">
+            <div class="card-header">
+                <h3><i class="fas fa-plus"></i> Add New Account</h3>
+            </div>
+            <div class="card-body">
+                <form id="addAccountForm" class="add-form">
+                    <div class="form-group">
+                        <label for="accountNumber">Account Number *</label>
+                        <input type="text" id="accountNumber" name="account" required 
+                               placeholder="Enter MT5 account number" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label for="nickname">Nickname</label>
+                        <input type="text" id="nickname" name="nickname" 
+                               placeholder="Optional display name" class="form-input">
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-success">
+                            <i class="fas fa-plus"></i> Add Account
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Accounts Table -->
+        <div class="card">
+            <div class="card-header">
+                <h3><i class="fas fa-table"></i> Account Management</h3>
+                <div class="table-actions">
+                    <input type="text" id="searchInput" placeholder="Search accounts..." class="search-input">
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-container">
+                    <table class="accounts-table" id="accountsTable">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Account</th>
+                                <th>Nickname</th>
+                                <th>PID</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accountsTableBody">
+                            <tr class="no-data">
+                                <td colspan="6">
+                                    <div class="no-data-message">
+                                        <i class="fas fa-inbox"></i>
+                                        <p>No accounts found. Add your first account above.</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Info -->
+        <div class="card">
+            <div class="card-header">
+                <h3><i class="fas fa-info-circle"></i> System Information</h3>
+            </div>
+            <div class="card-body">
+                <div class="system-info">
+                    <div class="info-item">
+                        <strong>Server Status:</strong>
+                        <span class="status-badge online" id="serverStatus">Online</span>
+                    </div>
+                    <div class="info-item">
+                        <strong>Webhook Endpoint:</strong>
+                        <code id="webhookEndpoint">Loading...</code>
+                        <button class="btn-copy" onclick="copyWebhookUrl()" title="Copy to clipboard">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                    </div>
+                    <div class="info-item">
+                        <strong>Last Health Check:</strong>
+                        <span id="lastHealthCheck">--:--:--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner">
+            <i class="fas fa-spinner fa-spin"></i>
+            <p>Processing...</p>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Confirmation Modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h4 id="modalTitle">Confirm Action</h4>
+                <button class="modal-close" onclick="closeModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p id="modalMessage">Are you sure you want to perform this action?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-danger" id="modalConfirmBtn" onclick="confirmAction()">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
