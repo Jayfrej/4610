@@ -469,6 +469,24 @@ def write_command_for_ea(account, command):
         logger.error(f"[FILE_WRITE_ERROR] Account {account}: {str(e)}")
         return False
 
+@app.route('/diagnose')
+@basic_auth_required
+def diagnose_system():
+    """Diagnose system configuration"""
+    try:
+        diagnosis = session_manager.diagnose_profile_source()
+        
+        return jsonify({
+            'profile_source': session_manager.profile_source,
+            'instances_dir': session_manager.instances_dir,
+            'mt5_path': session_manager.mt5_path,
+            'diagnosis': diagnosis
+        })
+        
+    except Exception as e:
+        logger.error(f"[DIAGNOSE] Failed to diagnose system: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     logger.info("[STARTING] Trading Bot Server")
     logger.info(f"[CONFIG] Webhook endpoint: /webhook/{WEBHOOK_TOKEN}")
