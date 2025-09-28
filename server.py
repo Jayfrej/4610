@@ -114,6 +114,17 @@ def monitor_instances():
 monitor_thread = threading.Thread(target=monitor_instances, daemon=True)
 monitor_thread.start()
 
+# Error handlers
+@app.errorhandler(405)
+def method_not_allowed(error):
+    logger.warning(f"[METHOD_NOT_ALLOWED] {request.method} {request.path} from {get_remote_address()}")
+    return jsonify({'error': 'Method not allowed'}), 405
+
+@app.errorhandler(404)
+def not_found(error):
+    logger.warning(f"[NOT_FOUND] {request.method} {request.path} from {get_remote_address()}")
+    return jsonify({'error': 'Endpoint not found'}), 404
+
 @app.route('/')
 @basic_auth_required
 def index():
@@ -126,7 +137,7 @@ def static_files(filename):
     """Serve static files"""
     return send_from_directory('static', filename)
 
-@app.route('/health')
+@app.route('/health', methods=['GET', 'HEAD'])
 def health_check():
     """Health check endpoint for uptime monitoring"""
     try:
@@ -149,6 +160,27 @@ def health_check():
     except Exception as e:
         logger.error(f"[HEALTH_CHECK_ERROR] {str(e)}")
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/webhook/health', methods=['GET', 'HEAD'])
+def webhook_health():
+    """Dedicated health check for webhook endpoint"""
+    return jsonify({
+        'status': 'ok',
+        'webhook_status': 'active',
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/webhook/', methods=['GET'])
+@app.route('/webhook', methods=['GET'])
+def webhook_info():
+    """Webhook endpoint information"""
+    return jsonify({
+        'message': 'Webhook endpoint active',
+        'supported_methods': ['POST'],
+        'health_check': '/webhook/health',
+        'endpoint_format': '/webhook/{token}',
+        'timestamp': datetime.now().isoformat()
+    })
 
 @app.route('/accounts', methods=['GET'])
 @basic_auth_required
