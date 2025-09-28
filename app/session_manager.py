@@ -87,6 +87,11 @@ class SessionManager:
     def get_instance_path(self, account: str) -> str:
         return os.path.join(self.instances_dir, str(account))
 
+    def get_bat_path(self, account: str) -> str:
+        """Get path to the BAT launcher file for this account"""
+        instance_path = self.get_instance_path(account)
+        return os.path.join(instance_path, f"launch_mt5_{account}.bat")
+
     def _auto_detect_profile_source(self) -> Optional[str]:
         appdata = os.getenv("APPDATA")
         if not appdata:
@@ -111,6 +116,119 @@ class SessionManager:
         if info["exists"]:
             info["subdirs"] = [d for d in ("config", "profiles", "MQL5", "bases") if os.path.exists(os.path.join(p, d))]
         return info
+
+    # -------------------- BAT File Creation --------------------
+    def create_bat_launcher(self, account: str) -> bool:
+        """Create a BAT file to launch MT5 in portable mode for this account"""
+        try:
+            instance_path = self.get_instance_path(account)
+            bat_path = self.get_bat_path(account)
+            
+            # Find MT5 executable in instance
+            terminal_exe = os.path.join(instance_path, "terminal64.exe")
+            if not os.path.exists(terminal_exe):
+                terminal_exe = os.path.join(instance_path, "terminal.exe")
+                if not os.path.exists(terminal_exe):
+                    logger.error(f"[CREATE_BAT] No MT5 executable found in: {instance_path}")
+                    return False
+            
+            # Create portable data path
+            data_path = os.path.join(instance_path, "Data")
+            os.makedirs(data_path, exist_ok=True)
+            
+            # Create BAT content with portable mode
+            bat_content = f'''@echo off
+REM Auto-generated BAT launcher for MT5 Account {account}
+REM This launches MT5 in portable mode with dedicated data path
+
+echo Starting MT5 for Account {account} in Portable Mode...
+echo Data Path: {data_path}
+echo Instance Path: {instance_path}
+
+cd /d "{instance_path}"
+
+REM Launch MT5 with portable mode and custom data path
+"{terminal_exe}" /portable /datapath="{data_path}"
+
+pause
+'''
+            
+            # Write BAT file
+            with open(bat_path, 'w', encoding='utf-8') as f:
+                f.write(bat_content)
+            
+            logger.info(f"[CREATE_BAT] ✓ Created BAT launcher: {bat_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[CREATE_BAT] Failed to create BAT for {account}: {e}")
+            return False
+
+    def launch_bat_file(self, account: str) -> bool:
+        """Launch the BAT file for this account"""
+        try:
+            bat_path = self.get_bat_path(account)
+            if not os.path.exists(bat_path):
+                logger.error(f"[LAUNCH_BAT] BAT file not found: {bat_path}")
+                return False
+            
+            logger.info(f"[LAUNCH_BAT] Launching BAT: {bat_path}")
+            
+            # Launch BAT file
+            proc = subprocess.Popen(
+                [bat_path],
+                cwd=os.path.dirname(bat_path),
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                shell=True
+            )
+            
+            # Give it a moment to start
+            time.sleep(2)
+            
+            # Try to get the actual MT5 process PID
+            pid = self._find_mt5_pid_for_account(account)
+            if pid:
+                self.update_account_status(account, "Online", pid)
+                logger.info(f"[LAUNCH_BAT] ✓ MT5 started for {account}, PID: {pid}")
+                return True
+            else:
+                logger.warning(f"[LAUNCH_BAT] BAT launched but MT5 PID not found for {account}")
+                self.update_account_status(account, "Starting", None)
+                return True  # Still consider success since BAT launched
+                
+        except Exception as e:
+            logger.error(f"[LAUNCH_BAT] Failed to launch BAT for {account}: {e}")
+            return False
+
+    def _find_mt5_pid_for_account(self, account: str) -> Optional[int]:
+        """Try to find the MT5 process PID for this account"""
+        if psutil is None:
+            return None
+        
+        try:
+            instance_path = os.path.abspath(self.get_instance_path(account))
+            
+            for proc in psutil.process_iter(["pid", "name", "exe", "cwd"]):
+                try:
+                    name = (proc.info.get("name") or "").lower()
+                    if name not in ("terminal64.exe", "terminal.exe"):
+                        continue
+                    
+                    exe = proc.info.get("exe") or ""
+                    cwd = proc.info.get("cwd") or ""
+                    
+                    # Check if this process is running from our instance
+                    if (instance_path in os.path.abspath(exe) or 
+                        instance_path in os.path.abspath(cwd)):
+                        return proc.info["pid"]
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"[FIND_PID] Error finding PID for {account}: {e}")
+            
+        return None
 
     # -------------------- MT5 Process Utils --------------------
     def _close_all_mt5_processes(self):
@@ -196,9 +314,11 @@ class SessionManager:
         return True
 
     def create_instance(self, account: str, nickname: str = "") -> bool:
+        """Create instance, generate BAT file, and launch it automatically"""
         try:
             if self.account_exists(account):
                 logger.info(f"[CREATE_INSTANCE] Account {account} already exists in DB; continuing.")
+            
             # Close MT5 files locks
             logger.info("[CREATE_INSTANCE] Closing all MT5 processes...")
             self._close_all_mt5_processes()
@@ -243,8 +363,13 @@ class SessionManager:
                         except Exception as item_err:
                             logger.warning(f"[CREATE_INSTANCE] Failed to copy {item}: {item_err}")
 
+            # Copy user profile to instance (if available)
             self._copy_user_profile_to_instance(instance_path)
+            
+            # Create portable data directory structure
+            self._create_portable_data_structure(instance_path)
 
+            # Add to database
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO accounts (account, nickname, status, pid, created) VALUES (?, ?, COALESCE((SELECT status FROM accounts WHERE account=?),'Offline'), COALESCE((SELECT pid FROM accounts WHERE account=?), NULL), COALESCE((SELECT created FROM accounts WHERE account=?), ?))",
@@ -252,36 +377,92 @@ class SessionManager:
                 )
                 conn.commit()
 
-            started = self.start_instance(account)
-            if not started:
-                logger.warning(f"[CREATE_INSTANCE] Instance created but failed to start for {account}")
+            # Create BAT launcher
+            logger.info(f"[CREATE_INSTANCE] Creating BAT launcher for {account}...")
+            if not self.create_bat_launcher(account):
+                logger.error(f"[CREATE_INSTANCE] Failed to create BAT launcher for {account}")
+                return False
+            
+            # Launch the BAT file immediately
+            logger.info(f"[CREATE_INSTANCE] Auto-launching MT5 for {account}...")
+            if not self.launch_bat_file(account):
+                logger.warning(f"[CREATE_INSTANCE] Instance created but failed to auto-launch for {account}")
+                # Don't return False here - instance creation was successful
+            
+            logger.info(f"[CREATE_INSTANCE] ✓ Successfully created and launched instance for {account}")
             return True
+            
         except Exception as e:
             logger.error(f"[CREATE_INSTANCE] Failed for {account}: {e}")
             return False
 
+    def _create_portable_data_structure(self, instance_path: str):
+        """Create the portable data directory structure"""
+        try:
+            data_path = os.path.join(instance_path, "Data")
+            
+            # Create essential directories for portable mode
+            directories = [
+                data_path,
+                os.path.join(data_path, "MQL5"),
+                os.path.join(data_path, "MQL5", "Files"),
+                os.path.join(data_path, "MQL5", "Include"),
+                os.path.join(data_path, "MQL5", "Experts"),
+                os.path.join(data_path, "MQL5", "Indicators"),
+                os.path.join(data_path, "MQL5", "Scripts"),
+                os.path.join(data_path, "config"),
+                os.path.join(data_path, "profiles"),
+                os.path.join(data_path, "bases"),
+                os.path.join(data_path, "logs"),
+            ]
+            
+            for dir_path in directories:
+                os.makedirs(dir_path, exist_ok=True)
+                
+            logger.info(f"[PORTABLE_STRUCTURE] ✓ Created portable data structure in {data_path}")
+            
+        except Exception as e:
+            logger.warning(f"[PORTABLE_STRUCTURE] Failed to create structure: {e}")
+
     def _copy_user_profile_to_instance(self, instance_path: str):
+        """Copy user profile data to both instance and portable data directory"""
         try:
             src = self.profile_source
             if not src or not os.path.exists(src):
                 logger.info(f"[COPY_PROFILE] Profile source not found or not set: {src}")
                 return
+            
+            # Copy to both locations for compatibility
+            data_path = os.path.join(instance_path, "Data")
+            
             items = [
                 ("config", "config"),
                 ("profiles", "profiles"),
                 ("MQL5", "MQL5"),
-                ("bases", "Bases"),
+                ("bases", "bases"),
             ]
+            
             for sname, dname in items:
                 sp = os.path.join(src, sname)
-                dp = os.path.join(instance_path, dname)
-                if os.path.exists(sp):
-                    if os.path.exists(dp):
-                        logger.info(f"[COPY_PROFILE] Merging {sname} -> {dname}")
-                        self._merge_directories(sp, dp)
-                    else:
-                        shutil.copytree(sp, dp, dirs_exist_ok=True)
-                        logger.info(f"[COPY_PROFILE] ✓ Copied {sname}")
+                if not os.path.exists(sp):
+                    continue
+                
+                # Copy to instance root (traditional location)
+                dp_instance = os.path.join(instance_path, dname)
+                # Copy to Data folder (portable location)
+                dp_data = os.path.join(data_path, dname)
+                
+                for dp in [dp_instance, dp_data]:
+                    try:
+                        if os.path.exists(dp):
+                            logger.info(f"[COPY_PROFILE] Merging {sname} -> {dp}")
+                            self._merge_directories(sp, dp)
+                        else:
+                            shutil.copytree(sp, dp, dirs_exist_ok=True)
+                            logger.info(f"[COPY_PROFILE] ✓ Copied {sname} -> {dp}")
+                    except Exception as e:
+                        logger.warning(f"[COPY_PROFILE] Failed to copy {sname} to {dp}: {e}")
+                        
         except Exception as e:
             logger.warning(f"[COPY_PROFILE] Error: {e}")
 
@@ -299,6 +480,7 @@ class SessionManager:
                     logger.debug(f"[MERGE_DIRS] Skip {f}: {e}")
 
     def start_instance(self, account: str) -> bool:
+        """Start instance using BAT file (preferred) or direct execution"""
         try:
             if self.is_instance_alive(account):
                 logger.info(f"[START_INSTANCE] Account {account} already running")
@@ -309,6 +491,15 @@ class SessionManager:
                 logger.error(f"[START_INSTANCE] Instance directory not found: {inst}")
                 return False
 
+            # Try to use BAT file first (portable mode)
+            bat_path = self.get_bat_path(account)
+            if os.path.exists(bat_path):
+                logger.info(f"[START_INSTANCE] Using BAT launcher for {account}")
+                return self.launch_bat_file(account)
+            
+            # Fallback to direct execution (legacy method)
+            logger.info(f"[START_INSTANCE] BAT not found, using direct launch for {account}")
+            
             exe = os.path.join(inst, "terminal64.exe")
             if not os.path.exists(exe):
                 exe = os.path.join(inst, "terminal.exe")
@@ -316,17 +507,24 @@ class SessionManager:
                     logger.error(f"[START_INSTANCE] No MT5 executable found in: {inst}")
                     return False
 
-            logger.info(f"[START_INSTANCE] Launching MT5 for {account}")
+            # Try to launch with portable mode even without BAT
+            data_path = os.path.join(inst, "Data")
+            os.makedirs(data_path, exist_ok=True)
+            
+            logger.info(f"[START_INSTANCE] Launching MT5 for {account} with portable mode")
             proc = subprocess.Popen(
-                [exe],
+                [exe, "/portable", f"/datapath={data_path}"],
                 cwd=inst,
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            pid = proc.pid
+            
+            time.sleep(2)
+            pid = self._find_mt5_pid_for_account(account) or proc.pid
             self.update_account_status(account, "Online", pid)
             return True
+            
         except Exception as e:
             logger.error(f"[START_INSTANCE] Failed for {account}: {e}")
             return False
