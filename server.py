@@ -179,6 +179,7 @@ def webhook_info():
         'supported_methods': ['POST'],
         'health_check': '/webhook/health',
         'endpoint_format': '/webhook/{token}',
+        'supported_actions': ['BUY', 'SELL', 'LONG', 'SHORT', 'CLOSE', 'CLOSE_ALL', 'CLOSE_SYMBOL'],
         'timestamp': datetime.now().isoformat()
     })
 
@@ -343,8 +344,8 @@ def webhook_handler(token):
         return jsonify({'error': 'Internal server error'}), 500
 
 def validate_webhook_payload(data):
-    """Validate webhook payload"""
-    required_fields = ['symbol', 'action', 'volume']
+    """Validate webhook payload - Updated to support close actions"""
+    required_fields = ['action']
     
     # Check for account(s)
     if 'account_number' not in data and 'accounts' not in data:
@@ -356,32 +357,76 @@ def validate_webhook_payload(data):
             return {'valid': False, 'error': f'Missing field: {field}'}
     
     # Validate action
-    valid_actions = ['BUY', 'SELL', 'LONG', 'SHORT']
-    if data['action'].upper() not in valid_actions:
+    action = data['action'].upper()
+    
+    if action in ['BUY', 'SELL', 'LONG', 'SHORT']:
+        # Trading actions - require symbol and volume
+        if 'symbol' not in data:
+            return {'valid': False, 'error': 'symbol required for trading actions'}
+        if 'volume' not in data:
+            return {'valid': False, 'error': 'volume required for trading actions'}
+        
+        # Set default order_type if not provided
+        if 'order_type' not in data:
+            data['order_type'] = 'market'
+        
+        # Validate order_type specific requirements
+        order_type = data['order_type'].lower()
+        if order_type in ['limit', 'stop']:
+            if 'price' not in data:
+                return {'valid': False, 'error': f'price required for {order_type} orders'}
+        
+        # Validate volume
+        try:
+            volume = float(data['volume'])
+            if volume <= 0:
+                return {'valid': False, 'error': 'Volume must be positive'}
+        except (ValueError, TypeError):
+            return {'valid': False, 'error': 'Volume must be a number'}
+            
+    elif action in ['CLOSE', 'CLOSE_ALL', 'CLOSE_SYMBOL']:
+        # Close actions
+        if action == 'CLOSE':
+            # Close specific position - requires ticket or symbol
+            if 'ticket' not in data and 'symbol' not in data:
+                return {'valid': False, 'error': 'ticket or symbol required for CLOSE action'}
+            
+            # Validate ticket if provided
+            if 'ticket' in data:
+                try:
+                    int(data['ticket'])
+                except (ValueError, TypeError):
+                    return {'valid': False, 'error': 'ticket must be a number'}
+                    
+        elif action == 'CLOSE_SYMBOL':
+            # Close all positions for specific symbol
+            if 'symbol' not in data:
+                return {'valid': False, 'error': 'symbol required for CLOSE_SYMBOL action'}
+        # CLOSE_ALL doesn't need additional parameters
+        
+        # Validate volume for partial close if provided
+        if 'volume' in data:
+            try:
+                volume = float(data['volume'])
+                if volume <= 0:
+                    return {'valid': False, 'error': 'Volume must be positive'}
+            except (ValueError, TypeError):
+                return {'valid': False, 'error': 'Volume must be a number'}
+        
+        # Validate position_type if provided
+        if 'position_type' in data:
+            position_type = data['position_type'].upper()
+            if position_type not in ['BUY', 'SELL']:
+                return {'valid': False, 'error': 'position_type must be BUY or SELL'}
+                
+    else:
+        valid_actions = ['BUY', 'SELL', 'LONG', 'SHORT', 'CLOSE', 'CLOSE_ALL', 'CLOSE_SYMBOL']
         return {'valid': False, 'error': f'Invalid action. Must be one of: {valid_actions}'}
-    
-    # Set default order_type if not provided (Option A)
-    if 'order_type' not in data:
-        data['order_type'] = 'market'
-    
-    # Validate order_type specific requirements
-    order_type = data['order_type'].lower()
-    if order_type in ['limit', 'stop']:
-        if 'price' not in data:
-            return {'valid': False, 'error': f'price required for {order_type} orders'}
-    
-    # Validate volume
-    try:
-        volume = float(data['volume'])
-        if volume <= 0:
-            return {'valid': False, 'error': 'Volume must be positive'}
-    except (ValueError, TypeError):
-        return {'valid': False, 'error': 'Volume must be a number'}
     
     return {'valid': True}
 
 def process_webhook(data):
-    """Process validated webhook data"""
+    """Process validated webhook data - Updated to support close actions"""
     try:
         # Get target accounts
         if 'accounts' in data:
@@ -389,14 +434,18 @@ def process_webhook(data):
         else:
             target_accounts = [data['account_number']]
         
-        # Symbol mapping
-        original_symbol = data['symbol']
-        mapped_symbol = symbol_mapper.map_symbol(original_symbol)
+        action = data['action'].upper()
+        mapped_symbol = None
         
-        if not mapped_symbol:
-            return {'success': False, 'error': f'Cannot map symbol: {original_symbol}'}
-        
-        logger.info(f"[SYMBOL_MAPPING] {original_symbol} → {mapped_symbol}")
+        # Symbol mapping only for actions that need symbols
+        if action in ['BUY', 'SELL', 'LONG', 'SHORT', 'CLOSE_SYMBOL'] or (action == 'CLOSE' and 'symbol' in data):
+            original_symbol = data['symbol']
+            mapped_symbol = symbol_mapper.map_symbol(original_symbol)
+            
+            if not mapped_symbol:
+                return {'success': False, 'error': f'Cannot map symbol: {original_symbol}'}
+            
+            logger.info(f"[SYMBOL_MAPPING] {original_symbol} → {mapped_symbol}")
         
         # Process for each account
         results = []
@@ -412,64 +461,136 @@ def process_webhook(data):
                 results.append({'account': account, 'success': False, 'error': 'Account is offline'})
                 continue
             
-            # Prepare trading command
+            # Prepare command
             command = prepare_trading_command(data, mapped_symbol, account)
             
-            # TODO: Send command to MT5
-            # Option 1: Write to MQL5\Files\... for EA to read
-            # Option 2: Use MetaTrader5 Python library to send directly
+            # Log the command
+            logger.info(f"[{action}_COMMAND] Account {account}: {json.dumps(command, ensure_ascii=False)}")
             
-            # For now, just log the command
-            logger.info(f"[TRADING_COMMAND] Account {account}: {json.dumps(command, ensure_ascii=False)}")
-            
-            # Write command to file for EA to process (EA-pull method)
+            # Write command to file for EA to process
             file_result = write_command_for_ea(account, command)
-            results.append({'account': account, 'success': file_result, 'command': command})
+            results.append({
+                'account': account, 
+                'success': file_result, 
+                'command': command,
+                'action': action
+            })
         
         # Summarize results
         success_count = sum(1 for r in results if r['success'])
         total_count = len(results)
         
-        if success_count == total_count:
-            return {'success': True, 'message': f'Command sent to {success_count}/{total_count} accounts'}
-        elif success_count > 0:
-            return {'success': True, 'message': f'Partial success: {success_count}/{total_count} accounts'}
+        # Generate summary message based on action type
+        if action in ['CLOSE', 'CLOSE_ALL', 'CLOSE_SYMBOL']:
+            action_desc = {
+                'CLOSE': 'Close position',
+                'CLOSE_ALL': 'Close all positions', 
+                'CLOSE_SYMBOL': f'Close {data.get("symbol", "")} positions'
+            }.get(action, action)
         else:
-            return {'success': False, 'error': 'Failed to send to any account'}
+            action_desc = f'{action} command'
+        
+        if success_count == total_count:
+            return {'success': True, 'message': f'{action_desc} sent to {success_count}/{total_count} accounts'}
+        elif success_count > 0:
+            return {'success': True, 'message': f'{action_desc} partial success: {success_count}/{total_count} accounts'}
+        else:
+            return {'success': False, 'error': f'Failed to send {action_desc} to any account'}
             
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
 def prepare_trading_command(data, mapped_symbol, account):
-    """Prepare trading command structure"""
-    # Normalize action
+    """Prepare trading command structure - Updated to support close actions"""
     action = data['action'].upper()
-    if action in ['SELL', 'SHORT']:
-        action = 'SELL'
-    elif action in ['BUY', 'LONG']:
-        action = 'BUY'
     
+    # Base command structure
     command = {
         'timestamp': datetime.now().isoformat(),
         'account': account,
-        'symbol': mapped_symbol,
-        'original_symbol': data['symbol'],
         'action': action,
-        'order_type': data.get('order_type', 'market'),
-        'volume': float(data['volume']),
     }
     
-    # Optional fields
-    if 'price' in data:
-        command['price'] = float(data['price'])
-    if 'take_profit' in data:
-        command['take_profit'] = float(data['take_profit'])
-    if 'stop_loss' in data:
-        command['stop_loss'] = float(data['stop_loss'])
-    if 'comment' in data:
-        command['comment'] = str(data['comment'])
-    if 'deviation' in data:
-        command['deviation'] = int(data['deviation'])
+    if action in ['BUY', 'SELL', 'LONG', 'SHORT']:
+        # Trading actions
+        if action in ['SELL', 'SHORT']:
+            action = 'SELL'
+        elif action in ['BUY', 'LONG']:
+            action = 'BUY'
+        
+        command.update({
+            'action': action,
+            'symbol': mapped_symbol,
+            'original_symbol': data['symbol'],
+            'order_type': data.get('order_type', 'market'),
+            'volume': float(data['volume']),
+        })
+        
+        # Optional fields for trading
+        if 'price' in data:
+            command['price'] = float(data['price'])
+        if 'take_profit' in data:
+            command['take_profit'] = float(data['take_profit'])
+        if 'stop_loss' in data:
+            command['stop_loss'] = float(data['stop_loss'])
+        if 'comment' in data:
+            command['comment'] = str(data['comment'])
+        if 'deviation' in data:
+            command['deviation'] = int(data['deviation'])
+    
+    elif action == 'CLOSE':
+        # Close specific position
+        command['action'] = 'CLOSE'
+        
+        if 'ticket' in data:
+            command['ticket'] = int(data['ticket'])
+        
+        if 'symbol' in data:
+            command['symbol'] = mapped_symbol if mapped_symbol else data['symbol']
+            command['original_symbol'] = data['symbol']
+        
+        # Optional volume for partial close
+        if 'volume' in data:
+            try:
+                command['volume'] = float(data['volume'])
+            except (ValueError, TypeError):
+                pass  # Ignore invalid volume, will close full position
+        
+        # Optional comment
+        if 'comment' in data:
+            command['comment'] = str(data['comment'])
+    
+    elif action == 'CLOSE_ALL':
+        # Close all positions
+        command['action'] = 'CLOSE_ALL'
+        
+        # Optional filter by position type
+        if 'position_type' in data:
+            position_type = data['position_type'].upper()
+            if position_type in ['BUY', 'SELL']:
+                command['position_type'] = position_type
+        
+        # Optional comment
+        if 'comment' in data:
+            command['comment'] = str(data['comment'])
+    
+    elif action == 'CLOSE_SYMBOL':
+        # Close all positions for specific symbol
+        command.update({
+            'action': 'CLOSE_SYMBOL',
+            'symbol': mapped_symbol,
+            'original_symbol': data['symbol'],
+        })
+        
+        # Optional filter by position type
+        if 'position_type' in data:
+            position_type = data['position_type'].upper()
+            if position_type in ['BUY', 'SELL']:
+                command['position_type'] = position_type
+        
+        # Optional comment
+        if 'comment' in data:
+            command['comment'] = str(data['comment'])
     
     return command
 
@@ -482,10 +603,28 @@ def write_command_for_ea(account, command):
             logger.error(f"[FILE_WRITE_ERROR] Instance path not found for account {account}")
             return False
         
-        # Create MQL5/Files directory if not exists
-        files_dir = os.path.join(instance_path, 'MQL5', 'Files')
-        if not os.path.exists(files_dir):
-            os.makedirs(files_dir)
+        # Try both possible MQL5 Files locations
+        files_dirs = [
+            os.path.join(instance_path, 'MQL5', 'Files'),
+            os.path.join(instance_path, 'Data', 'MQL5', 'Files')
+        ]
+        
+        files_dir = None
+        for dir_path in files_dirs:
+            if not os.path.exists(dir_path):
+                try:
+                    os.makedirs(dir_path, exist_ok=True)
+                    files_dir = dir_path
+                    break
+                except Exception:
+                    continue
+            else:
+                files_dir = dir_path
+                break
+        
+        if not files_dir:
+            logger.error(f"[FILE_WRITE_ERROR] Could not create MQL5/Files directory for account {account}")
+            return False
         
         # Write command to JSON file
         filename = f"webhook_command_{int(time.time())}.json"
@@ -523,6 +662,10 @@ if __name__ == '__main__':
     logger.info("[STARTING] Trading Bot Server")
     logger.info(f"[CONFIG] Webhook endpoint: /webhook/{WEBHOOK_TOKEN}")
     logger.info(f"[CONFIG] External URL: {EXTERNAL_BASE_URL}")
+    logger.info(f"[CONFIG] Supported actions: BUY, SELL, LONG, SHORT, CLOSE, CLOSE_ALL, CLOSE_SYMBOL")
+    
+    # Send startup notification
+    email_handler.send_startup_notification()
     
     app.run(
         host='0.0.0.0',
