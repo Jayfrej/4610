@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="th" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MT5 Trading Bot - Multi Account Manager</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet"/>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <h1><i class="fas fa-robot"></i> MT5 Trading Bot</h1>
+        <p>Multi-Account Webhook Manager</p>
+      </div>
+      <div class="header-actions">
+        <!-- ปุ่มสลับธีม: ไอคอนอย่างเดียว -->
+        <button id="themeToggleBtn" class="btn btn-icon btn-secondary" aria-label="Toggle Theme" title="Toggle Theme">
+          <i class="fas fa-sun"></i>
+        </button>
+
+        <button id="refreshBtn" class="btn btn-secondary" title="Refresh Data">
+          <i class="fas fa-sync-alt"></i> Refresh
+        </button>
+        <button id="webhookBtn" class="btn btn-primary" title="Copy Webhook URL">
+          <i class="fas fa-link"></i> Copy Webhook
+        </button>
+      </div>
+    </header>
+
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon"><i class="fas fa-users"></i></div>
+        <div class="stat-info">
+          <div class="stat-number" id="totalAccounts">0</div>
+          <div class="stat-label">Total Accounts</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon online"></div>
+        <div class="stat-info">
+          <div class="stat-number" id="onlineAccounts">0</div>
+          <div class="stat-label">Online</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon offline"></div>
+        <div class="stat-info">
+          <div class="stat-number" id="offlineAccounts">0</div>
+          <div class="stat-label">Offline</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon"><i class="fas fa-clock"></i></div>
+        <div class="stat-info">
+          <div class="stat-number" id="lastUpdate">--:--</div>
+          <div class="stat-label">Last Update</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Two Column -->
+    <div class="two-column-layout">
+      <!-- Left -->
+      <div class="card">
+        <div class="card-header"><h3><i class="fas fa-plus"></i> Add MT5 Account</h3></div>
+        <div class="card-body">
+          <form id="addAccountForm" class="add-form-vertical">
+            <div class="form-group">
+              <label for="accountNumber">Account Number</label>
+              <input id="accountNumber" name="account" class="form-input" placeholder="e.g., 1123456" required />
+            </div>
+            <div class="form-group">
+              <label for="nickname">Nickname</label>
+              <input id="nickname" name="nickname" class="form-input" placeholder="e.g. Main Account" />
+            </div>
+            <button type="submit" class="btn btn-success btn-full"><i class="fas fa-plus"></i> Add Account</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Right -->
+      <div class="card">
+        <div class="card-header"><h3><i class="fas fa-link"></i> Webhook Configuration</h3></div>
+        <div class="card-body webhook-config">
+          <div class="form-group">
+            <label for="webhookUrl">Webhook URL</label>
+            <div class="url-input-group">
+              <input id="webhookUrl" class="form-input" readonly
+                     placeholder="https://your-domain.com/webhook/your-secure-token"/>
+              <button class="btn-copy" onclick="copyWebhookUrl()" title="Copy to clipboard"><i class="fas fa-copy"></i></button>
+            </div>
+          </div>
+
+          <div class="webhook-info">
+            <div class="info-row"><strong>Usage:</strong> Use this URL in TradingView alerts or other webhook sources</div>
+            <div class="info-row"><strong>Method:</strong> POST</div>
+            <div class="info-row"><strong>Content-Type:</strong> application/json</div>
+          </div>
+
+          <div class="example-section">
+            <div class="example-header">
+              <span>Example JSON Payload:</span>
+              <div class="example-nav">
+                <button class="example-nav-btn" onclick="showExample(0)">Market</button>
+                <button class="example-nav-btn" onclick="showExample(1)">Market 2</button>
+                <button class="example-nav-btn" onclick="showExample(2)">Limit</button>
+                <button class="example-nav-btn" onclick="showExample(3)">Limit 2</button>
+                <button class="example-nav-btn" onclick="showExample(4)">Close</button>
+                <button class="example-nav-btn" onclick="showExample(5)">Close 2</button>
+              </div>
+            </div>
+            <div class="example-content">
+              <div class="example-title" id="exampleTitle">Market Order:</div>
+              <div class="json-container">
+                <button class="json-copy-btn" onclick="copyExample()" title="Copy JSON"><i class="fas fa-copy"></i></button>
+                <pre id="jsonCode" class="json-code">{
+  "account_number": "1123456",
+  "symbol": "XAUUSD",
+  "action": "BUY",
+  "volume": 0.01
+}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Accounts Table -->
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="fas fa-table"></i> Account Management</h3>
+        <div class="table-actions"><input id="searchInput" class="search-input" placeholder="Search accounts..."/></div>
+      </div>
+      <div class="card-body">
+        <div class="table-container">
+          <table class="accounts-table" id="accountsTable">
+            <thead>
+              <tr><th>Status</th><th>Account</th><th>Nickname</th><th>PID</th><th>Created</th><th>Actions</th></tr>
+            </thead>
+            <tbody id="accountsTableBody">
+              <tr class="no-data"><td colspan="6">
+                <div class="no-data-message"><i class="fas fa-inbox"></i><p>No accounts found. Add your first account above.</p></div>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- System Info -->
+    <div class="card">
+      <div class="card-header"><h3><i class="fas fa-info-circle"></i> System Information</h3></div>
+      <div class="card-body">
+        <div class="system-info">
+          <div class="info-item"><strong>Server Status:</strong><span class="status-badge online" id="serverStatus">Online</span></div>
+          <div class="info-item"><strong>Webhook Endpoint:</strong><code id="webhookEndpoint">Loading...</code>
+            <button class="btn-copy" onclick="copyWebhookUrl()" title="Copy"><i class="fas fa-copy"></i></button>
+          </div>
+          <div class="info-item"><strong>Last Health Check:</strong><span id="lastHealthCheck">--:--:--</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Overlays -->
+  <div id="loadingOverlay" class="loading-overlay"><div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i><p>Processing...</p></div></div>
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Modal -->
+  <div id="modalOverlay" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header"><h4 id="modalTitle">Confirm Action</h4><button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button></div>
+      <div class="modal-body"><p id="modalMessage">Are you sure you want to perform this action?</p></div>
+      <div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button id="modalConfirmBtn" class="btn btn-danger" onclick="confirmAction()">Confirm</button></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
