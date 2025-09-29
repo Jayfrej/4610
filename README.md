@@ -6,12 +6,7 @@ A Python-based trading bot for managing multiple MetaTrader 5 instances and exec
 
 - [📦 Installation](#installation) - Start here to install the bot
 - [🌐 Cloudflare Tunnel Setup](#external-access-cloudflare-tunnel) - Setup HTTPS access
-- [System Architecture](#system-architecture)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Webhook Integration](#webhook-integration)
-- [Troubleshooting](#troubleshooting)
-
+  
 ## System Architecture
 
 ### System Flow Diagram
