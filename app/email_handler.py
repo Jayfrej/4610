@@ -3,6 +3,7 @@ import smtplib
 import logging
 import traceback
 import sys
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -12,29 +13,35 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 class EmailHandler:
-    """Email notification handler with comprehensive error reporting"""
-    
+    """Email notification handler with comprehensive error reporting
+    (Patched: add suppression rules for Unauthorized/WP scan alerts)
+    """
+
     def __init__(self):
         self.enabled = os.getenv('EMAIL_ENABLED', 'False').lower() == 'true'
-        
+
         # Simplified email configuration - just need sender email and password
         self.sender_email = os.getenv('SENDER_EMAIL', '').strip()
         self.sender_password = os.getenv('SENDER_PASSWORD', '').strip()
-        
+
         # Auto-detect SMTP settings based on email domain
         self.smtp_server, self.smtp_port = self._detect_smtp_settings()
-        
+
         # Recipients (can be multiple, comma-separated)
         self.recipients = os.getenv('RECIPIENTS', '').strip()
         if self.recipients:
             self.to_emails = [email.strip() for email in self.recipients.split(',') if email.strip()]
         else:
             self.to_emails = []
-        
+
         # Error tracking
         self.error_count = 0
         self.last_error_time = None
-        
+
+        # --- NEW: suppression patterns ---
+        # You can override/extend via ENV: EMAIL_IGNORE_PATTERNS (comma-separated regex)
+        self.ignore_patterns = self._compile_ignore_patterns()
+
         if self.enabled:
             if not all([self.sender_email, self.sender_password, self.to_emails]):
                 logger.warning("[EMAIL] Email enabled but missing configuration (SENDER_EMAIL, SENDER_PASSWORD, RECIPIENTS)")
@@ -44,38 +51,80 @@ class EmailHandler:
                 logger.info(f"[EMAIL] From: {self.sender_email}")
                 logger.info(f"[EMAIL] To: {', '.join(self.to_emails)}")
                 logger.info(f"[EMAIL] SMTP: {self.smtp_server}:{self.smtp_port}")
-                
+
                 # Set up error handler for all logging
                 self._setup_error_handler()
         else:
             logger.info("[EMAIL] Email notifications disabled")
-    
+
+    # ---------- NEW: helpers for suppression ----------
+    def _compile_ignore_patterns(self):
+        """Build list of regex patterns that will suppress email alerts.
+
+        Defaults (cover Unauthorized/WP scans):
+          - 'failed basic auth'
+          - 'unauthorized access'
+          - WordPress scan paths: /wp-admin, /wp-login.php, /wordpress/, /wp-content, /wp-includes
+
+        Extend/override with ENV `EMAIL_IGNORE_PATTERNS`, comma-separated regex strings.
+        """
+        defaults = [
+            r'failed basic auth',
+            r'unauthorized access',
+            r'/wp-admin',
+            r'/wp-login\.php',
+            r'/wordpress/',
+            r'/wp-content',
+            r'/wp-includes',
+        ]
+        extra = os.getenv('EMAIL_IGNORE_PATTERNS', '').strip()
+        if extra:
+            for tok in extra.split(','):
+                tok = tok.strip()
+                if tok:
+                    defaults.append(tok)
+        try:
+            return [re.compile(p, re.I) for p in defaults]
+        except re.error as e:
+            logger.warning(f"[EMAIL] Invalid regex in EMAIL_IGNORE_PATTERNS: {e}")
+            return [re.compile(p, re.I) for p in defaults if p]
+
+    def _should_suppress(self, subject: str, message: str) -> bool:
+        """Return True if the alert should be suppressed according to ignore patterns."""
+        haystack = f"{subject}\n{message}"
+        for pat in self.ignore_patterns:
+            if pat.search(haystack):
+                logger.info(f"[EMAIL] Suppressed alert due to pattern: {pat.pattern} | Subject: {subject}")
+                return True
+        return False
+    # --------------------------------------------------
+
     def _setup_error_handler(self):
         """Set up custom logging handler to catch all errors"""
         class ErrorEmailHandler(logging.Handler):
             def __init__(self, email_handler):
                 super().__init__(level=logging.ERROR)
                 self.email_handler = email_handler
-                
+
             def emit(self, record):
                 if record.levelno >= logging.ERROR:
                     self.email_handler._handle_logging_error(record)
-        
+
         # Add error handler to root logger to catch all errors
         error_handler = ErrorEmailHandler(self)
         logging.getLogger().addHandler(error_handler)
-    
+
     def _handle_logging_error(self, record):
         """Handle errors from logging system"""
         try:
             error_msg = self.format(record)
             module_name = record.name
-            
+
             # Get stack trace if available
             stack_trace = ""
             if record.exc_info:
                 stack_trace = "\n\nStack Trace:\n" + "".join(traceback.format_exception(*record.exc_info))
-            
+
             full_message = f"""
 Error Details:
 Module: {module_name}
@@ -86,7 +135,11 @@ Function: {record.funcName}
 Line: {record.lineno}
 {stack_trace}
             """
-            
+
+            # NEW: suppress here as well
+            if self._should_suppress(f"System Error in {module_name}", full_message):
+                return
+
             self.send_error_alert(
                 f"System Error in {module_name}",
                 full_message.strip(),
@@ -100,14 +153,14 @@ Line: {record.lineno}
         except Exception as e:
             # Avoid infinite recursion if email sending fails
             print(f"[EMAIL] Failed to send error email: {e}")
-    
+
     def _detect_smtp_settings(self):
         """Auto-detect SMTP settings based on sender email domain"""
         if not self.sender_email:
             return 'smtp.gmail.com', 587  # Default
-        
+
         domain = self.sender_email.split('@')[1].lower() if '@' in self.sender_email else ''
-        
+
         # Common email providers
         smtp_settings = {
             'gmail.com': ('smtp.gmail.com', 587),
@@ -119,16 +172,20 @@ Line: {record.lineno}
             'icloud.com': ('smtp.mail.me.com', 587),
             'me.com': ('smtp.mail.me.com', 587),
         }
-        
+
         settings = smtp_settings.get(domain, ('smtp.gmail.com', 587))  # Default to Gmail
         logger.info(f"[EMAIL] Detected SMTP settings for {domain}: {settings[0]}:{settings[1]}")
         return settings
-    
+
     def send_alert(self, subject: str, message: str, priority: str = "normal"):
         """Send email alert asynchronously"""
         if not self.enabled:
             return
-        
+
+        # NEW: suppression check
+        if self._should_suppress(subject, message):
+            return
+
         # Send email in background thread to avoid blocking
         thread = threading.Thread(
             target=self._send_email_async,
@@ -136,15 +193,19 @@ Line: {record.lineno}
             daemon=True
         )
         thread.start()
-    
+
     def send_error_alert(self, subject: str, message: str, error_details: Optional[Dict[str, Any]] = None, priority: str = "high"):
         """Send error-specific alert with enhanced formatting"""
         if not self.enabled:
             return
-        
+
+        # NEW: suppression check
+        if self._should_suppress(subject, message):
+            return
+
         self.error_count += 1
         self.last_error_time = datetime.now()
-        
+
         # Enhanced error message format
         enhanced_message = f"""
 🚨 ERROR ALERT #{self.error_count}
@@ -158,18 +219,18 @@ Error Summary:
 
 Please check the system immediately.
         """
-        
+
         # Use high priority for errors by default
         self.send_alert(f"🚨 {subject}", enhanced_message.strip(), priority)
-    
+
     def send_exception_alert(self, exception: Exception, context: str = "", additional_info: Dict[str, Any] = None):
         """Send alert for caught exceptions with full details"""
         exc_type = type(exception).__name__
         exc_message = str(exception)
-        
+
         # Get current stack trace
         stack_trace = traceback.format_exc()
-        
+
         message = f"""
 Exception occurred in the system:
 
@@ -180,12 +241,12 @@ Context: {context}
 Stack Trace:
 {stack_trace}
         """
-        
+
         if additional_info:
             message += "\nAdditional Information:\n"
             for key, value in additional_info.items():
                 message += f"- {key}: {value}\n"
-        
+
         self.send_error_alert(
             f"Exception: {exc_type}",
             message.strip(),
@@ -195,7 +256,7 @@ Stack Trace:
                 'context': context
             }
         )
-    
+
     def send_mt5_error_alert(self, account: str, operation: str, error_code: int = None, error_message: str = ""):
         """Send MT5-specific error alert"""
         message = f"""
@@ -209,7 +270,7 @@ Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 This error occurred during trading operations and requires immediate attention.
         """
-        
+
         self.send_error_alert(
             f"MT5 Error - {operation} Failed",
             message.strip(),
@@ -220,7 +281,7 @@ This error occurred during trading operations and requires immediate attention.
                 'error_message': error_message
             }
         )
-    
+
     def send_webhook_error_alert(self, error_type: str, error_message: str, payload_data: Dict[str, Any] = None):
         """Send webhook-specific error alert"""
         message = f"""
@@ -230,10 +291,10 @@ Error Type: {error_type}
 Error Message: {error_message}
 Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         """
-        
+
         if payload_data:
             message += f"\nPayload Data:\n{payload_data}"
-        
+
         self.send_error_alert(
             f"Webhook Error - {error_type}",
             message.strip(),
@@ -243,7 +304,7 @@ Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                 'payload': payload_data
             }
         )
-    
+
     def send_connection_error_alert(self, service: str, error_message: str, retry_count: int = 0):
         """Send connection error alert"""
         message = f"""
@@ -256,7 +317,7 @@ Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 The system is having trouble connecting to {service}.
         """
-        
+
         self.send_error_alert(
             f"Connection Error - {service}",
             message.strip(),
@@ -266,7 +327,7 @@ The system is having trouble connecting to {service}.
                 'retry_count': retry_count
             }
         )
-    
+
     def _send_email_async(self, subject: str, message: str, priority: str = "normal"):
         """Send email in background thread"""
         try:
@@ -275,7 +336,7 @@ The system is having trouble connecting to {service}.
             msg['From'] = self.sender_email
             msg['To'] = ', '.join(self.to_emails)
             msg['Subject'] = f"[MT5 Trading Bot] {subject}"
-            
+
             # Add priority header
             if priority == "high":
                 msg['X-Priority'] = '1'
@@ -283,32 +344,32 @@ The system is having trouble connecting to {service}.
             elif priority == "low":
                 msg['X-Priority'] = '5'
                 msg['X-MSMail-Priority'] = 'Low'
-            
+
             # Create HTML and text versions
             html_body = self._create_html_body(subject, message)
             text_body = self._create_text_body(subject, message)
-            
+
             msg.attach(MIMEText(text_body, 'plain', 'utf-8'))
             msg.attach(MIMEText(html_body, 'html', 'utf-8'))
-            
+
             # Send email
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 server.starttls()
                 server.login(self.sender_email, self.sender_password)
-                
+
                 for to_email in self.to_emails:
                     server.send_message(msg, self.sender_email, [to_email])
-            
+
             logger.info(f"[EMAIL] Alert sent successfully: {subject}")
-            
+
         except Exception as e:
             # Use print instead of logger to avoid recursion
             print(f"[EMAIL] Failed to send alert: {str(e)}")
-    
+
     def _create_html_body(self, subject: str, message: str) -> str:
         """Create HTML email body with enhanced error styling"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # Determine alert color and icon based on subject
         if any(word in subject.lower() for word in ['error', 'failed', 'exception', '🚨', 'unauthorized', 'offline']):
             alert_color = '#dc3545'  # Red
@@ -326,7 +387,7 @@ The system is having trouble connecting to {service}.
             alert_color = '#007bff'  # Blue
             alert_type = 'Info'
             alert_icon = 'ℹ️'
-        
+
         html = f"""
         <!DOCTYPE html>
         <html>
@@ -351,18 +412,18 @@ The system is having trouble connecting to {service}.
                 <div class="header">
                     <h2 style="color: #333; margin: 0;">{alert_icon} MT5 Trading Bot Alert</h2>
                 </div>
-                
+
                 <div class="alert">
                     <div class="alert-title">{alert_icon} {alert_type}: {subject}</div>
                     <div class="timestamp">{timestamp}</div>
                 </div>
-                
+
                 {f'<div class="error-stats">Total Errors Today: {self.error_count}</div>' if self.error_count > 0 else ''}
-                
+
                 <div class="content">
                     <div class="error-content">{message}</div>
                 </div>
-                
+
                 <div class="footer">
                     <p><strong>This is an automated error alert from your MT5 Trading Bot system.</strong></p>
                     <p>Please check your system immediately if this is an error notification.</p>
@@ -373,11 +434,11 @@ The system is having trouble connecting to {service}.
         </html>
         """
         return html
-    
+
     def _create_text_body(self, subject: str, message: str) -> str:
         """Create plain text email body"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         text = f"""
 🤖 MT5 Trading Bot Alert
 {"=" * 60}
@@ -394,7 +455,7 @@ This is an automated message from your MT5 Trading Bot system.
 Please check your system immediately if this is an error notification.
         """
         return text.strip()
-    
+
     def send_startup_notification(self):
         """Send notification when bot starts"""
         message = f"""
@@ -411,7 +472,7 @@ The system is ready to receive trading signals and close position commands.
 All errors will be automatically reported via email.
         """
         self.send_alert("System Startup", message.strip(), "low")
-    
+
     def send_shutdown_notification(self):
         """Send notification when bot shuts down"""
         message = f"""
@@ -423,7 +484,7 @@ Total Errors Handled: {self.error_count}
 All active MT5 instances will remain running.
         """
         self.send_alert("System Shutdown", message.strip(), "low")
-    
+
     def send_account_notification(self, account: str, action: str, details: str = ""):
         """Send account-related notification"""
         message = f"""
@@ -434,7 +495,7 @@ Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 {details}
         """
         self.send_alert(f"Account {action}", message.strip())
-    
+
     def send_webhook_summary(self, success_count: int, total_count: int, details: str = ""):
         """Send webhook processing summary"""
         if success_count == total_count:
@@ -446,7 +507,7 @@ Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         else:
             subject = f"Webhook Failed ({success_count}/{total_count})"
             priority = "high"
-        
+
         message = f"""
 Webhook Processing Summary
 Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -456,13 +517,13 @@ Results: {success_count} successful out of {total_count} accounts
 {details}
         """
         self.send_alert(subject, message.strip(), priority)
-    
+
     def test_email_config(self) -> bool:
         """Test email configuration"""
         if not self.enabled:
             logger.info("[EMAIL] Email not enabled, skipping test")
             return True
-        
+
         try:
             test_message = f"""
 This is a test email from your MT5 Trading Bot system.
@@ -477,15 +538,15 @@ Configuration Test Results:
 If you receive this email, your email configuration is working correctly.
 All system errors will be automatically reported to this email address.
             """
-            
+
             self.send_alert("Email Configuration Test", test_message.strip(), "low")
             logger.info("[EMAIL] Test email sent")
             return True
-            
+
         except Exception as e:
             logger.error(f"[EMAIL] Test email failed: {str(e)}")
             return False
-    
+
     def get_error_stats(self) -> Dict[str, Any]:
         """Get error statistics"""
         return {
