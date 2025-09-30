@@ -2,37 +2,62 @@
 
 A Python-based trading bot for managing multiple MetaTrader 5 instances and executing trades via TradingView webhooks.
 
-## Quick Navigation
+---
 
-- [📦 Installation](#installation) - Start here to install the bot
-- [🌐 Cloudflare Tunnel Setup](#external-access-cloudflare-tunnel) - Setup HTTPS access
-  
+## Quick install
+
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [External Access](#external-access-cloudflare-tunnel)
+- [Usage](#usage)
+- [Webhook Integration](#webhook-integration)
+
+
+---
+
+## Quick Start
+
+### Installation Steps
+1. Install Python 3.8+ (check "Add Python to PATH")
+2. Install dependencies: `pip install -r requirements.txt`
+3. Run setup: `python setup.py`
+4. Configure MT5 profile (save as "Default")
+5. Start bot: `python server.py`
+
+### Enable External Access
+1. Install cloudflared
+2. Create tunnel
+3. Configure DNS
+4. Run tunnel
+
+---
+
 ## System Architecture
 
 ### System Flow Diagram
 
 ```
-+--------------------+        +---------------------+        +------------------------+
-| Signal Sources     |  POST  |  Flask Server & UI  |        | Session Manager        |
-| (TradingView, etc) +------->|  /webhook/{TOKEN}   +------->| + MT5 Handler          |
-+--------------------+        +----------+----------+        +-----------+------------+
-                                          |                               |
-                         File-bridge JSON |                               | Launch/Track MT5
+┌────────────────────┐        ┌─────────────────────┐        ┌────────────────────────┐
+│ Signal Sources     │  POST  │  Flask Server & UI  │        │ Session Manager        │
+│ (TradingView, etc) ├───────>│  /webhook/{TOKEN}   ├───────>│ + MT5 Handler          │
+└────────────────────┘        └──────────┬──────────┘        └───────────┬────────────┘
+                                          │                               │
+                         File-bridge JSON │                               │ Launch/Track MT5
                                           v                               v
                               <InstanceRootPath>\              MT5 Instance(s)
-                              <Account>\MQL5\Files\    +-->    EA (All-in-One)
-                                                       |
-                                                       +-->    Symbol Mapper (server-side)
+                              <Account>\MQL5\Files\    ┌──>    EA (All-in-One)
+                                                       │
+                                                       └──>    Symbol Mapper (server-side)
 ```
 
 ### Working Modes
 
-**FILE_BRIDGE (Recommended):**
-- Server writes JSON file to `...\<Account>\MQL5\Files\...`
+**FILE_BRIDGE (Recommended)**
+- Server writes JSON to `...\<Account>\MQL5\Files\...`
 - EA polls and processes commands
 - More stable for multiple instances
 
-**WEBHOOK_POST (Alternative):**
+**WEBHOOK_POST (Alternative)**
 - EA calls `WebhookURL` at intervals
 - Processes JSON response immediately
 - Faster but requires EA configuration
@@ -40,58 +65,71 @@ A Python-based trading bot for managing multiple MetaTrader 5 instances and exec
 ### Data Flow Sequence
 
 ```
-1. TradingView Alert → POST webhook with JSON payload
-   ↓
-2. Flask Server → Token validation, JSON parsing, rate limiting
-   ↓
-3. Symbol Mapper → Normalize symbol (e.g., "XAUUSDM" → "XAUUSD")
-   ↓
-4. Session Manager → Verify account exists and is online
-   ↓
-5. MT5 Handler → Write JSON command to:
-   <InstanceRootPath>\<Account>\MQL5\Files\webhook_command_[timestamp].json
-   ↓
-6. MT5 Expert Advisor → Read JSON, execute trade, delete file
-   ↓
-7. Email Handler → Send trade confirmation or error alert
-   ↓
-8. Response → 200 OK or error message to TradingView
+1. TradingView Alert
+   ↓ POST webhook with JSON payload
+   
+2. Flask Server
+   ↓ Token validation, JSON parsing, rate limiting
+   
+3. Symbol Mapper
+   ↓ Normalize symbol (e.g., "XAUUSDM" → "XAUUSD")
+   
+4. Session Manager
+   ↓ Verify account exists and is online
+   
+5. MT5 Handler
+   ↓ Write JSON command to: <InstanceRootPath>\<Account>\MQL5\Files\webhook_command_[timestamp].json
+   
+6. MT5 Expert Advisor
+   ↓ Read JSON, execute trade, delete file
+   
+7. Email Handler
+   ↓ Send trade confirmation or error alert
+   
+8. Response
+   → 200 OK or error message to TradingView
 ```
 
-### Project Structure (Server Side)
+### Project Structure
 
+**Server Side**
 ```
 project-root/
+├─ server.py                    # Main Flask app: routes, auth, rate-limit, health, monitor thread
 ├─ app/
-│  ├─ session_manager.py        # Manage MT5 instance lifecycle
-│  ├─ symbol_mapper.py          # Map symbols (suffix/alias support)
-│  ├─ mt5_handler.py            # Python trading command layer (optional)
-│  ├─ config_manager.py         # Config/environment variables
-│  └─ email_handler.py          # Email notifications (optional)
-├─ static/                      # UI (HTML/CSS/JS)
-├─ mt5_instances/               # MT5 instance folders (important)
-├─ logs/  data/  backup/        # Logs/data/backups
-├─ server.py                    # Flask entrypoint
-├─ setup.py                     # Setup wizard
-├─ start.bat                    # Windows startup script
-├─ requirements.txt
-└─ .env.template
+│  ├─ __init__.py
+│  ├─ session_manager.py        # Manage MT5 instances (start/stop/restart/focus, path, status)
+│  ├─ symbol_mapper.py          # Map symbols from payload to actual MT5 symbol names
+│  ├─ email_handler.py          # Email notifications (startup, online/offline, errors)
+│  └─ trades.py                 # Record/read History Log + SSE /events/trades + /trades/clear
+├─ static/                      # Serve UI files (client-side) via Flask
+│  ├─ index.html                # Main UI page
+│  ├─ style.css                 # Styles
+│  └─ app.js                    # Client-side logic + SSE history
+├─ mt5_instances/               # MT5 instance folders
+├─ logs/
+│  └─ trading_bot.log           # Server log file from server.py
+├─ data/                        # Database and mappings
+├─ backup/                      # Backup storage
+├─ .env                         # Configuration (SECRET_KEY, BASIC_USER/PASS, WEBHOOK_TOKEN, SMTP, etc.)
+├─ requirements.txt             # Python dependencies
+└─ README.md
 ```
 
-### Instance Root Path Structure (MT5 Side)
-
+**MT5 Instance Side**
 ```
 <InstanceRootPath>\
   └─ <AccountNumber>\
        └─ MQL5\
             └─ Files\
                 ├─ webhook_command_17590xxxxx.json        ← Command files
-                └─ (if not Direct Mode) instance_<AccountNumber>\  ← junction by EA
+                └─ instance_<AccountNumber>\              ← Junction by EA (if not Direct Mode)
 ```
 
-**Important:** Write files to `...\<Account>\MQL5\Files\` only — do NOT write to `...\Data\...` folder
+**Important**: Write files to `...\<Account>\MQL5\Files\` only — DO NOT write to `...\Data\...` folder
 
 ### JSON Command Structure
+
 ```json
 {
   "timestamp": "2025-09-29T10:30:00",
@@ -105,20 +143,42 @@ project-root/
 }
 ```
 
-## Features
+---
 
-- **Multi-Account Management**: Manage unlimited MT5 accounts from a single interface
-- **Portable MT5 Instances**: Each account runs in an isolated instance
-- **TradingView Webhook Integration**: Execute trades directly from TradingView alerts
-- **Real-time Monitoring**: Track account status, PIDs, and connection health
-- **Email Notifications**: Error reporting and trade alerts
-- **Symbol Auto-Mapping**: Intelligent symbol mapping with fuzzy matching
-- **Market & Pending Orders**: Execute instant BUY/SELL, LIMIT, and STOP orders
-- **Position Management**: Close specific positions, symbol positions, or all positions
+## Key Features
+
+### Core Functionality
+- **Webhook Integration** - Receive trading commands via `POST /webhook/<token>`
+  - Supports actions: `BUY/SELL/LONG/SHORT`, `CLOSE`, `CLOSE_ALL`, `CLOSE_SYMBOL`
+- **Multi-Account Management** - Create/Open/Stop/Restart/Delete accounts through UI
+- **Real-time History Log** - Command history with Server-Sent Events (SSE) + Clear button
+- **Health Monitoring** - System health checks via `GET /health` and `GET /webhook/health`
+
+### Security & Protection
+- **Basic Authentication** - Password-protected UI interface
+- **Rate Limiting** - Configurable webhook rate limits
+- **Token-based Access** - Secure webhook endpoint authentication
+
+### Monitoring & Alerts
+- **Email Notifications** - Alert system for critical events:
+  - System startup
+  - Instance online/offline status
+  - Payload validation errors
+  - Trading execution alerts
+  
+  **Note**: System does NOT send emails for Basic Auth failures from `127.0.0.1` or internal health checks to reduce false alarms
+
+### Trading Features
+- **Portable MT5 Instances** - Each account runs in isolated instance
+- **Symbol Auto-Mapping** - Intelligent symbol mapping with fuzzy matching
+- **Market & Pending Orders** - Execute instant BUY/SELL, LIMIT, and STOP orders
+- **Position Management** - Close specific positions, symbol positions, or all positions
+
+---
 
 ## Requirements
 
-### System
+### System Requirements
 - **OS**: Windows 10/11 (64-bit)
 - **Python**: 3.8+
 - **RAM**: 4GB minimum (8GB+ for multiple instances)
@@ -135,148 +195,205 @@ requests==2.31.0
 werkzeug==2.3.7
 ```
 
+---
+
 ## Installation
 
-### 1. Install Python
+### Step 1: Install Python
 Download Python 3.8+ from [python.org](https://www.python.org/downloads/)
 - Check "Add Python to PATH" during installation
 
-### 2. Install Dependencies
+### Step 2: Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Run Setup Wizard
+### Step 3: Run Setup Wizard
 ```bash
 python setup.py
 ```
 
-The wizard will:
+**The wizard will:**
 - Check system requirements
 - Create directory structure
 - Configure profile source
 - Generate security credentials
 - Setup email notifications (optional)
 
-### 4. Prepare MT5 Profile
+### Step 4: Prepare MT5 Profile
 1. Open your main MT5 installation
 2. Configure settings (charts, templates, EAs, indicators)
 3. Save as "Default" profile: **File → Profiles → Save As... → "Default"**
 
+---
+
 ## Configuration
 
 ### Basic Configuration (.env)
+
 ```env
-# Authentication
+# ============================================
+# AUTHENTICATION
+# ============================================
 BASIC_USER=admin
 BASIC_PASS=your_secure_password
 
-# Security
+# ============================================
+# SECURITY
+# ============================================
 SECRET_KEY=auto_generated_key
 WEBHOOK_TOKEN=auto_generated_token
 EXTERNAL_BASE_URL=http://localhost:5000
 
-# Server
+# ============================================
+# SERVER
+# ============================================
 PORT=5000
 DEBUG=False
 
-# MT5 Configuration
+# ============================================
+# MT5 CONFIGURATION
+# ============================================
 MT5_MAIN_PATH=C:\Program Files\MetaTrader 5\terminal64.exe
 MT5_INSTANCES_DIR=mt5_instances
 TRADING_METHOD=file
 
-# Email (Optional)
+# ============================================
+# EMAIL (OPTIONAL)
+# ============================================
 EMAIL_ENABLED=True
 SENDER_EMAIL=your.email@gmail.com
 SENDER_PASSWORD=your_app_password
 RECIPIENTS=alert1@gmail.com,alert2@gmail.com
 
-# Symbol Mapping
+# ============================================
+# SYMBOL MAPPING
+# ============================================
 SYMBOL_FETCH_ENABLED=False
 FUZZY_MATCH_THRESHOLD=0.6
 
-# Rate Limiting
+# ============================================
+# RATE LIMITING
+# ============================================
 RATE_LIMIT_WEBHOOK=10 per minute
 RATE_LIMIT_API=100 per hour
 ```
 
 ### Gmail Email Setup
+
 1. Enable 2-Factor Authentication
-2. Generate App Password: Google Account → Security → 2-Step Verification → App passwords
-3. Use generated password in SENDER_PASSWORD
+2. Generate App Password:
+   - Go to: Google Account → Security → 2-Step Verification → App passwords
+3. Use generated password in `SENDER_PASSWORD`
+
+---
 
 ## External Access (Cloudflare Tunnel)
 
-### 1. Install Cloudflared
+### Quick Setup (4 Steps)
 
-**Windows:**
-```bash
-# Using winget
+#### 1. Install Cloudflared
+
+**Windows (PowerShell as Administrator):**
+```powershell
 winget install --id Cloudflare.cloudflared
-
-# Or download from GitHub
-# https://github.com/cloudflare/cloudflared/releases
 ```
+Or download from: https://github.com/cloudflare/cloudflared/releases
 
-### 2. Setup Tunnel
+#### 2. Login & Create Tunnel
 
-**Quick Temporary Tunnel (Testing):**
-```bash
-# Start bot first
-python server.py
-
-# In new terminal, start tunnel
-cloudflared tunnel --url http://localhost:5000
-
-# Copy the HTTPS URL and update .env
-EXTERNAL_BASE_URL=https://random-words-1234.trycloudflare.com
-```
-
-**Permanent Tunnel (Production):**
-```bash
-# Login to Cloudflare
+```powershell
+# Login
 cloudflared tunnel login
 
-# Create named tunnel
+# Create tunnel
 cloudflared tunnel create mt5-bot
+```
+Save the Tunnel ID from output
 
-# Run tunnel
-cloudflared tunnel --url http://localhost:5000
+#### 3. Create Config File
+
+Create file: `C:\Users\<Username>\.cloudflared\config.yml`
+
+```yaml
+tunnel: YOUR_TUNNEL_ID
+credentials-file: C:\Users\<Username>\.cloudflared\YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: webhook.yourdomain.com
+    service: http://127.0.0.1:5000
+    
+  - hostname: yourdomain.com
+    service: http://127.0.0.1:5000
+    
+  - service: http_status:404
 ```
 
-### 3. Security Configuration (Recommended)
+**Replace:**
+- `YOUR_TUNNEL_ID` = Tunnel ID from step 2
+- `webhook.yourdomain.com` and `yourdomain.com` = your domain
 
-**Cloudflare Firewall Rules:**
+#### 4. Setup DNS & Run
 
-Allow correct webhook endpoint:
+**Configure DNS (choose one):**
+
+**Option A - Command Line:**
+```powershell
+cloudflared tunnel route dns mt5-bot webhook.yourdomain.com
+cloudflared tunnel route dns mt5-bot yourdomain.com
+```
+
+**Option B - Cloudflare Dashboard:**
+1. Go to DNS settings
+2. Add CNAME record:
+   - Name: `webhook` or `@`
+   - Target: `YOUR_TUNNEL_ID.cfargotunnel.com`
+   - Proxy: Enable (orange cloud)
+
+**Run Tunnel:**
+```powershell
+cloudflared tunnel run mt5-bot
+```
+
+**Update .env:**
+```env
+EXTERNAL_BASE_URL=https://webhook.yourdomain.com
+```
+
+### Security Configuration (Recommended)
+
+#### Cloudflare Firewall Rules
+
+**Allow correct webhook endpoint:**
 ```
 (http.request.uri.path eq "/webhook/YOUR_TOKEN" and http.request.method eq "POST")
 ```
 
-Block incorrect webhook attempts:
+**Block incorrect webhook attempts:**
 ```
 (http.request.uri.path matches "^/webhook/.*" and http.request.uri.path ne "/webhook/YOUR_TOKEN")
 ```
 
-**Rate Limiting:**
+#### Rate Limiting
 - Set 10 requests/minute for `/webhook/*`
 - Enable Bot Fight Mode: ON
 
-**Install as Windows Service:**
-```bash
-cloudflared service install
-net start cloudflared
-```
+---
 
 ## Usage
 
 ### Start the Bot
+
 ```bash
 python server.py
 ```
-Access: `http://localhost:5000` or `https://trading.yourdomain.com`
+
+**Access:**
+- Local: `http://localhost:5000`
+- External: `https://trading.yourdomain.com`
 
 ### Add MT5 Account
+
 1. Open web interface
 2. Click "Add MT5 Account"
 3. Enter account number and nickname
@@ -284,14 +401,30 @@ Access: `http://localhost:5000` or `https://trading.yourdomain.com`
 5. MT5 terminal opens automatically - login with your credentials
 
 ### Manage Accounts
+
 - **Restart**: Stop and restart instance
 - **Stop**: Terminate MT5 process
 - **Open**: Start offline instance
 - **Delete**: Remove instance and files
 
+### View Command History
+
+- Real-time command log displayed in UI
+- Updates via Server-Sent Events (SSE)
+- Clear history with "Clear" button
+
+### Check System Health
+
+**Endpoints:**
+- `GET /health` - Overall system health
+- `GET /webhook/health` - Webhook endpoint health
+
+---
+
 ## Webhook Integration
 
 ### TradingView Setup
+
 1. Create Alert in TradingView
 2. Enable "Webhook URL"
 3. Paste: `https://trading.yourdomain.com/webhook/YOUR_TOKEN`
@@ -299,7 +432,7 @@ Access: `http://localhost:5000` or `https://trading.yourdomain.com`
 
 ### Webhook Payload Examples
 
-**Market Order (Single Account)**
+#### Market Order (Single Account)
 ```json
 {
   "account_number": "1123456",
@@ -311,7 +444,7 @@ Access: `http://localhost:5000` or `https://trading.yourdomain.com`
 }
 ```
 
-**Multiple Accounts**
+#### Multiple Accounts
 ```json
 {
   "accounts": ["1123456", "7891011"],
@@ -321,7 +454,7 @@ Access: `http://localhost:5000` or `https://trading.yourdomain.com`
 }
 ```
 
-**Using TradingView Variables**
+#### Using TradingView Variables
 ```json
 {
   "account_number": "1123456",
@@ -331,7 +464,7 @@ Access: `http://localhost:5000` or `https://trading.yourdomain.com`
 }
 ```
 
-**Limit Order**
+#### Limit Order
 ```json
 {
   "account_number": "1123456",
@@ -343,27 +476,47 @@ Access: `http://localhost:5000` or `https://trading.yourdomain.com`
 }
 ```
 
-**Close Positions**
+#### Close Positions
+
+**Close specific position:**
 ```json
-// Close specific position
-{"account_number": "1123456", "action": "CLOSE", "ticket": 123456789}
-
-// Close all positions for symbol
-{"account_number": "1123456", "action": "CLOSE_SYMBOL", "symbol": "XAUUSD"}
-
-// Close all positions
-{"account_number": "1123456", "action": "CLOSE_ALL"}
+{
+  "account_number": "1123456",
+  "action": "CLOSE",
+  "ticket": 123456789
+}
 ```
 
-### Actions
-- **BUY/LONG**: Open buy position
-- **SELL/SHORT**: Open sell position
-- **CLOSE**: Close specific position
-- **CLOSE_SYMBOL**: Close all positions for symbol
-- **CLOSE_ALL**: Close all open positions
+**Close all positions for symbol:**
+```json
+{
+  "account_number": "1123456",
+  "action": "CLOSE_SYMBOL",
+  "symbol": "XAUUSD"
+}
+```
+
+**Close all positions:**
+```json
+{
+  "account_number": "1123456",
+  "action": "CLOSE_ALL"
+}
+```
+
+### Available Actions
+
+| Action | Description |
+|--------|-------------|
+| `BUY` / `LONG` | Open buy position |
+| `SELL` / `SHORT` | Open sell position |
+| `CLOSE` | Close specific position |
+| `CLOSE_SYMBOL` | Close all positions for symbol |
+| `CLOSE_ALL` | Close all open positions |
 
 ### Symbol Mapping
-The bot automatically maps symbols:
+
+**Automatic Mappings:**
 - `XAUUSDM` → `XAUUSD`
 - `GOLD` → `XAUUSD`
 - `EURUSD.` → `EURUSD`
@@ -377,26 +530,38 @@ The bot automatically maps symbols:
 }
 ```
 
+---
+
 ## Troubleshooting
 
 ### MT5 Instance Won't Start
+
+**Solutions:**
 - Check `MT5_MAIN_PATH` in `.env`
 - Manually run: `mt5_instances/[account]/launch_mt5_[account].bat`
 - Check logs: `logs/trading_bot.log`
 
 ### Webhook Returns 401
+
+**Solutions:**
 - Verify webhook token matches `.env`
 - Copy webhook URL from web interface
 
 ### Symbol Not Found
+
+**Solutions:**
 - Add custom mapping in `data/custom_mappings.json`
 - Check symbol exists in MT5 Market Watch
 
 ### Email Not Working
+
+**Solutions:**
 - For Gmail: Use App Password, not regular password
 - Verify SMTP settings in `.env`
+- Check if email alerts are being filtered (localhost/health-check requests won't trigger emails)
 
 ### Cloudflare Tunnel Down
+
 ```bash
 # Check service
 sc query cloudflared
@@ -406,9 +571,12 @@ net stop cloudflared
 net start cloudflared
 ```
 
+---
+
 ## Testing
 
 ### Test Webhook Locally
+
 ```powershell
 $body = @{
     account_number = "1123456"
@@ -422,71 +590,124 @@ Invoke-WebRequest -Uri "http://localhost:5000/webhook/YOUR_TOKEN" `
 ```
 
 ### Test via Cloudflare
+
 ```powershell
 Invoke-WebRequest -Uri "https://trading.yourdomain.com/webhook/YOUR_TOKEN" `
     -Method POST -ContentType "application/json" -Body $body
 ```
 
+### Test Health Endpoints
+
+```powershell
+# System health
+Invoke-WebRequest -Uri "http://localhost:5000/health"
+
+# Webhook health
+Invoke-WebRequest -Uri "http://localhost:5000/webhook/health"
+```
+
+---
+
 ## Best Practices
 
 ### Security
-- Use strong passwords
+
+- Use strong passwords for Basic Auth
 - Rotate webhook tokens every 3-6 months
-- Enable email alerts
+- Enable email alerts for critical events
 - Always use HTTPS (Cloudflare Tunnel)
 - Keep software updated
+- Review logs regularly
 
 ### Trading
+
 - Start with 0.01 lot size
 - Test on demo accounts first
 - Always use stop loss
 - Monitor execution daily
 - Have manual backup plan
+- Review command history regularly
 
 ### Maintenance
-**Weekly**: Review logs, check instance status
-**Monthly**: Clean logs, update packages, backup configs
-**Quarterly**: Full system update, security audit
+
+| Frequency | Tasks |
+|-----------|-------|
+| **Daily** | Check command history, verify instance status |
+| **Weekly** | Review logs, check system health endpoints |
+| **Monthly** | Clean logs, update packages, backup configs |
+| **Quarterly** | Full system update, security audit, token rotation |
+
+---
 
 ## Important Warnings
 
-⚠️ **Risk Warning**: Trading involves significant loss risk. This bot executes YOUR strategy - it does NOT make trading decisions.
+**Risk Warning**  
+Trading involves significant loss risk. This bot executes YOUR strategy - it does NOT make trading decisions.
 
-⚠️ **System Requirements**: Stable internet, powered-on Windows system, sufficient resources required 24/7.
+**System Requirements**  
+Stable internet, powered-on Windows system, sufficient resources required 24/7.
 
-⚠️ **Security**: Never share webhook token, use strong passwords, enable 2FA, review logs regularly.
+**Security**  
+Never share webhook token, use strong passwords, enable 2FA, review logs regularly.
 
-⚠️ **Testing**: ALWAYS test on demo accounts first with minimum lot sizes.
+**Testing**  
+ALWAYS test on demo accounts first with minimum lot sizes.
+
+**Email Alerts**  
+Email system filters out Basic Auth failures from localhost/health-checks to prevent spam. Configure alerts appropriately.
+
+---
 
 ## Backup
 
-**Critical Files**:
+### Critical Files
+
 ```
 .env
 data/accounts.db
 data/custom_mappings.json
 config.yml (if using Cloudflare)
 .cloudflared/ (if using Cloudflare)
+logs/trading_bot.log
 ```
 
-**Backup Command**:
+### Backup Command
+
 ```bash
 xcopy .env backup\ /Y
 xcopy data backup\data\ /Y /E
 xcopy config.yml backup\ /Y
+xcopy logs backup\logs\ /Y /E
 ```
+
+### Automated Backup Script
+
+Create `backup.bat`:
+```batch
+@echo off
+set BACKUP_DIR=backup\%date:~-4%%date:~3,2%%date:~0,2%_%time:~0,2%%time:~3,2%
+mkdir %BACKUP_DIR%
+xcopy .env %BACKUP_DIR%\ /Y
+xcopy data %BACKUP_DIR%\data\ /Y /E
+xcopy config.yml %BACKUP_DIR%\ /Y
+echo Backup completed: %BACKUP_DIR%
+```
+
+---
 
 ## Support
 
-For issues:
+**For issues:**
 1. Check logs: `logs/trading_bot.log`
-2. Review troubleshooting section
-3. Verify `.env` configuration
-4. Test Cloudflare Tunnel connectivity
+2. Check system health: `GET /health`
+3. Review command history in UI
+4. Verify `.env` configuration
+5. Test Cloudflare Tunnel connectivity
+6. Check email notifications settings
 
 ---
 
 **Version**: 1.0.0  
 **Compatible**: MT5 Build 3801+, Python 3.8+, Windows 10/11
 
-**Remember**: Discipline, risk management, and continuous learning are keys to successful trading. Use this tool wisely!
+**Remember**: Discipline, risk management, and continuous learning are keys to successful trading. Use this tool wisely.
