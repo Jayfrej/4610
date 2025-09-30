@@ -17,6 +17,9 @@ from app.session_manager import SessionManager
 from app.symbol_mapper import SymbolMapper
 from app.email_handler import EmailHandler
 
+# ADDED: imports for trade history blueprint & helpers
+from trades import trades_bp, record_and_broadcast, init_trades  # ADDED
+
 # Load environment variables
 load_dotenv()
 
@@ -44,6 +47,9 @@ except TypeError:
 session_manager = SessionManager()
 symbol_mapper = SymbolMapper()
 email_handler = EmailHandler()
+
+# ADDED: register trade history blueprint
+app.register_blueprint(trades_bp)  # ADDED
 
 # Setup logging
 log_dir = "logs"
@@ -73,6 +79,7 @@ def basic_auth_required(f):
         auth = request.authorization
         if not auth or not (auth.username == BASIC_USER and auth.password == BASIC_PASS):
             logger.warning(f"[UNAUTHORIZED] Basic auth failed from {get_remote_address()}")
+            # หมายเหตุ: ถ้าต้องการ 'ไม่ส่งอีเมล' สำหรับเคสนี้ ให้พึ่ง suppression ใน email_handler แทนการแก้บรรทัดนี้
             email_handler.send_alert("Unauthorized Access", f"Failed basic auth from {get_remote_address()}")
             return ('Unauthorized', 401, {
                 'WWW-Authenticate': 'Basic realm="Login Required"'
@@ -454,11 +461,27 @@ def process_webhook(data):
             if not session_manager.account_exists(account):
                 logger.warning(f"[ACCOUNT_NOT_FOUND] Account {account} not found")
                 results.append({'account': account, 'success': False, 'error': 'Account not found'})
+                # ADDED: broadcast error for history
+                record_and_broadcast({
+                    'status': 'error',
+                    'action': action,
+                    'symbol': data.get('symbol'),
+                    'account_number': account,
+                    'message': 'Account not found'
+                })  # ADDED
                 continue
             
             if not session_manager.is_instance_alive(account):
                 logger.warning(f"[ACCOUNT_OFFLINE] Account {account} is offline")
                 results.append({'account': account, 'success': False, 'error': 'Account is offline'})
+                # ADDED: broadcast error for history
+                record_and_broadcast({
+                    'status': 'error',
+                    'action': action,
+                    'symbol': data.get('symbol'),
+                    'account_number': account,
+                    'message': 'Account is offline'
+                })  # ADDED
                 continue
             
             # Prepare command
@@ -469,6 +492,29 @@ def process_webhook(data):
             
             # Write command to file for EA to process
             file_result = write_command_for_ea(account, command)
+
+            # ADDED: broadcast to History (success/error per account)
+            if file_result:
+                record_and_broadcast({
+                    'status': 'success',
+                    'action': action,
+                    'symbol': command.get('symbol', data.get('symbol')),
+                    'account_number': account,
+                    'volume': command.get('volume'),
+                    'price': command.get('price'),
+                    'message': 'Command written for EA'
+                })
+            else:
+                record_and_broadcast({
+                    'status': 'error',
+                    'action': action,
+                    'symbol': command.get('symbol', data.get('symbol')),
+                    'account_number': account,
+                    'volume': command.get('volume'),
+                    'message': 'Failed to write command for EA'
+                })
+            # END ADDED
+
             results.append({
                 'account': account, 
                 'success': file_result, 
@@ -666,6 +712,10 @@ if __name__ == '__main__':
     
     # Send startup notification
     email_handler.send_startup_notification()
+
+    # ADDED: warm up trade history buffer from file
+    with app.app_context():
+        init_trades()  # ADDED
     
     app.run(
         host='0.0.0.0',
