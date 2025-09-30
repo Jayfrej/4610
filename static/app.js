@@ -7,6 +7,10 @@ class TradingBotUI {
     this.refreshInterval = null;
     this.currentExampleIndex = 0;
 
+    this.tradeHistory = [];
+    this.maxHistoryItems = 100;
+    this._es = null;
+
     // JSON Examples
 this.jsonExamples = [
   {
@@ -98,13 +102,12 @@ this.jsonExamples = [
     const btn = document.getElementById('themeToggleBtn');
     if (!btn) return;
     const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-    // icon-only: show the icon of the *target* theme
     if (theme === 'dark') {
-      btn.innerHTML = '<i class="fas fa-sun"></i>';  // will go to light
+      btn.innerHTML = '<i class="fas fa-sun"></i>';
       btn.classList.remove('btn-primary'); btn.classList.add('btn-secondary');
       btn.setAttribute('aria-label','โหมดสว่าง'); btn.setAttribute('title','โหมดสว่าง');
     } else {
-      btn.innerHTML = '<i class="fas fa-moon"></i>'; // will go to dark
+      btn.innerHTML = '<i class="fas fa-moon"></i>';
       btn.classList.remove('btn-secondary'); btn.classList.add('btn-primary');
       btn.setAttribute('aria-label','โหมดมืด'); btn.setAttribute('title','โหมดมืด');
     }
@@ -117,50 +120,51 @@ this.jsonExamples = [
     this.startAutoRefresh();
     this.updateLastUpdateTime();
     this.showExample(0);
+
+    this.renderHistory();
+    this.loadInitialHistoryFromServer().then(() => {
+      this.subscribeTradeEvents();
+    });
   }
 
   setupEventListeners() {
-    // Theme toggle
     const themeBtn = document.getElementById('themeToggleBtn');
     if (themeBtn) themeBtn.addEventListener('click', () => this.toggleTheme());
 
-    // Form submission
     document.getElementById('addAccountForm').addEventListener('submit', (e) => {
       e.preventDefault();
       this.addAccount();
     });
 
-    // Refresh button
     document.getElementById('refreshBtn').addEventListener('click', () => this.loadData());
 
-    // Webhook copy button
     document.getElementById('webhookBtn').addEventListener('click', () => this.copyWebhookUrl());
 
-    // Search functionality
     document.getElementById('searchInput').addEventListener('input', (e) => {
       this.filterTable(e.target.value);
     });
 
-    // Modal close events
     document.addEventListener('click', (e) => {
       if (e.target.classList.contains('modal-overlay')) this.closeModal();
     });
 
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.closeModal();
-      // examples keyboard nav
       if (e.target.closest('.example-section')) {
         if (e.key === 'ArrowLeft') this.showExample(Math.max(0, this.currentExampleIndex - 1));
         if (e.key === 'ArrowRight') this.showExample(Math.min(this.jsonExamples.length - 1, this.currentExampleIndex + 1));
       }
     });
 
-    // Auto-refresh on visibility change
     document.addEventListener('visibilitychange', () => { if (!document.hidden) this.loadData(); });
 
-    // Connectivity
     window.addEventListener('online', () => { this.showToast('Connection restored', 'success'); this.loadData(); });
     window.addEventListener('offline', () => { this.showToast('Connection lost', 'warning'); });
+
+    const historyFilter = document.getElementById('historyFilter');
+    if (historyFilter) historyFilter.addEventListener('change', () => {
+      this.renderHistory();
+    });
   }
 
   /* ---------- Data ---------- */
@@ -482,7 +486,126 @@ this.jsonExamples = [
     }
   }
 
-  cleanup() { this.stopAutoRefresh(); }
+  async loadInitialHistoryFromServer() {
+    try {
+      const res = await fetch('/trades?limit=100');
+      if (!res.ok) return;
+      const data = await res.json();
+      const arr = Array.isArray(data.trades) ? data.trades : [];
+      arr.reverse().forEach(tr => this.addTradeToHistory(tr));
+    } catch (e) {
+      console.warn('loadInitialHistoryFromServer failed:', e);
+    }
+  }
+
+  subscribeTradeEvents() {
+    if (!('EventSource' in window)) return;
+    try {
+      if (this._es) { try { this._es.close(); } catch {} }
+      const es = new EventSource('/events/trades');
+      es.onmessage = (evt) => {
+        try {
+          const tr = JSON.parse(evt.data);
+          this.addTradeToHistory(tr);
+        } catch (e) { console.warn('Invalid trade event:', e); }
+      };
+      es.onerror = () => {};
+      this._es = es;
+    } catch (e) {
+      console.warn('SSE unavailable', e);
+    }
+  }
+
+  addTradeToHistory(tr) {
+    const norm = {
+      id: tr.id || String(Date.now()),
+      status: (tr.status || '').toLowerCase() === 'error' ? 'error' : 'success',
+      action: (tr.action || '').toUpperCase(),
+      symbol: tr.symbol || '-',
+      account: tr.account || tr.account_number || '-',
+      volume: tr.volume ?? '',
+      price: tr.price ?? '',
+      message: tr.message || '',
+      timestamp: tr.timestamp || new Date().toISOString(),
+    };
+    const idx = this.tradeHistory.findIndex(x => x.id === norm.id);
+    if (idx !== -1) this.tradeHistory.splice(idx, 1);
+    this.tradeHistory.unshift(norm);
+    if (this.tradeHistory.length > this.maxHistoryItems) {
+      this.tradeHistory.pop();
+    }
+    this.renderHistory();
+  }
+
+  renderHistory() {
+    const tbody = document.getElementById('historyTableBody');
+    if (!tbody) return;
+    const filterEl = document.getElementById('historyFilter');
+    const filter = (filterEl?.value || 'all').toLowerCase();
+    const list = this.tradeHistory.filter(t => {
+      if (filter === 'success') return t.status === 'success';
+      if (filter === 'error')   return t.status === 'error';
+      return true;
+    });
+    if (!list.length) {
+      tbody.innerHTML = `
+        <tr class="no-data">
+          <td colspan="8">
+            <div class="no-data-message">
+              <i class="fas fa-clock-rotate-left"></i>
+              <p>No trading history yet. Trades will appear here when executed.</p>
+            </div>
+          </td>
+        </tr>`;
+      return;
+    }
+    tbody.innerHTML = list.map(t => {
+      const time = new Date(t.timestamp).toLocaleString();
+      const badge = t.status === 'success' ? 'online' : 'offline';
+      return `
+        <tr>
+          <td><span class="status-badge ${badge}">${t.status}</span></td>
+          <td>${this.escape(t.action)}</td>
+          <td>${this.escape(t.symbol)}</td>
+          <td>${this.escape(t.account)}</td>
+          <td>${this.escape(t.volume)}</td>
+          <td>${this.escape(t.price)}</td>
+          <td>${this.escape(t.message)}</td>
+          <td>${this.escape(time)}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  escape(v) {
+    return String(v ?? '').replace(/[&<>"]/g, s => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'
+    }[s]));
+  }
+
+  // <<< Added: Clear history >>>
+  async clearHistory() {
+    const ok = await this.showConfirmDialog('Clear Trading History', 'Delete all saved trade history? This cannot be undone.');
+    if (!ok) return;
+
+    // ลองลบที่ฝั่งเซิร์ฟเวอร์ก่อน (ถ้ามี endpoint รองรับ)
+    let serverCleared = false;
+    try {
+      const res = await fetch('/trades/clear', { method: 'POST' });
+      serverCleared = res.ok;
+    } catch (_) { /* ignore */ }
+
+    // ไม่ว่าฝั่งเซิร์ฟเวอร์จะลบได้รึเปล่า เคลียร์ฝั่ง UI ให้เสร็จ
+    this.tradeHistory = [];
+    this.renderHistory();
+
+    this.showToast(serverCleared ? 'History cleared.' : 'History cleared locally.', 'success');
+  }
+  // >>> end
+
+  cleanup() { 
+    this.stopAutoRefresh(); 
+    if (this._es) { try { this._es.close(); } catch {} }
+  }
 }
 
 /* Helpers for inline onclick */
