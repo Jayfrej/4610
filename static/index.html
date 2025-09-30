@@ -16,7 +16,7 @@
         <p>Multi-Account Webhook Manager</p>
       </div>
       <div class="header-actions">
-        <!-- ปุ่มสลับธีม: ไอคอนอย่างเดียว -->
+        <!-- Icon-only theme toggle -->
         <button id="themeToggleBtn" class="btn btn-icon btn-secondary" aria-label="Toggle Theme" title="Toggle Theme">
           <i class="fas fa-sun"></i>
         </button>
@@ -146,6 +146,52 @@
               <tr class="no-data"><td colspan="6">
                 <div class="no-data-message"><i class="fas fa-inbox"></i><p>No accounts found. Add your first account above.</p></div>
               </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trading History -->
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="fas fa-history"></i> Trading History</h3>
+        <div class="table-actions">
+          <select id="historyFilter" class="form-input" style="width:auto;padding:8px 12px;">
+            <option value="all">All Trades</option>
+            <option value="success">Success Only</option>
+            <option value="error">Errors Only</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="ui.clearHistory()" title="Clear History">
+            <i class="fas fa-trash"></i> Clear
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <!-- เพิ่ม class history-scroll แค่นี้ -->
+        <div class="table-container history-scroll">
+          <table class="accounts-table" id="historyTable">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Action</th>
+                <th>Symbol</th>
+                <th>Account</th>
+                <th>Volume</th>
+                <th>Price</th>
+                <th>Message</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody">
+              <tr class="no-data">
+                <td colspan="8">
+                  <div class="no-data-message">
+                    <i class="fas fa-clock-rotate-left"></i>
+                    <p>No trading history yet. Trades will appear here when executed.</p>
+                  </div>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
