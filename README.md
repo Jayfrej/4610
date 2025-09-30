@@ -2,7 +2,6 @@
 
 A sophisticated web application designed to receive webhook signals from platforms like TradingView and execute trades across multiple MetaTrader 5 accounts simultaneously. This tool features a comprehensive user interface for managing accounts, monitoring instance status, and reviewing a detailed history log of all submitted orders. It also includes an integrated email notification system for alerts and a rate-limiting mechanism to prevent spam and ensure stable performance.
 
----
 
 ## Quick install
 
@@ -13,7 +12,6 @@ A sophisticated web application designed to receive webhook signals from platfor
 - [Webhook Integration](#webhook-integration)
 
 
----
 
 ## Quick Start
 
@@ -29,8 +27,6 @@ A sophisticated web application designed to receive webhook signals from platfor
 2. Create tunnel
 3. Configure DNS
 4. Run tunnel
-
----
 
 ## System Architecture
 
@@ -143,7 +139,6 @@ project-root/
 }
 ```
 
----
 
 ## Key Features
 
@@ -174,7 +169,6 @@ project-root/
 - **Market & Pending Orders** - Execute instant BUY/SELL, LIMIT, and STOP orders
 - **Position Management** - Close specific positions, symbol positions, or all positions
 
----
 
 ## Requirements
 
@@ -530,7 +524,6 @@ python server.py
 }
 ```
 
----
 
 ## Troubleshooting
 
@@ -571,7 +564,6 @@ net stop cloudflared
 net start cloudflared
 ```
 
----
 
 ## Testing
 
@@ -606,7 +598,6 @@ Invoke-WebRequest -Uri "http://localhost:5000/health"
 Invoke-WebRequest -Uri "http://localhost:5000/webhook/health"
 ```
 
----
 
 ## Best Practices
 
@@ -637,7 +628,6 @@ Invoke-WebRequest -Uri "http://localhost:5000/webhook/health"
 | **Monthly** | Clean logs, update packages, backup configs |
 | **Quarterly** | Full system update, security audit, token rotation |
 
----
 
 ## Important Warnings
 
@@ -656,7 +646,6 @@ ALWAYS test on demo accounts first with minimum lot sizes.
 **Email Alerts**  
 Email system filters out Basic Auth failures from localhost/health-checks to prevent spam. Configure alerts appropriately.
 
----
 
 ## Backup
 
@@ -693,7 +682,6 @@ xcopy config.yml %BACKUP_DIR%\ /Y
 echo Backup completed: %BACKUP_DIR%
 ```
 
----
 
 ## Support
 
