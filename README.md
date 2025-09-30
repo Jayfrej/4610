@@ -1,6 +1,6 @@
 # MT5 Trading Bot - Multi-Account Webhook Manager
 
-A Python-based trading bot for managing multiple MetaTrader 5 instances and executing trades via TradingView webhooks.
+A sophisticated web application designed to receive webhook signals from platforms like TradingView and execute trades across multiple MetaTrader 5 accounts simultaneously. This tool features a comprehensive user interface for managing accounts, monitoring instance status, and reviewing a detailed history log of all submitted orders. It also includes an integrated email notification system for alerts and a rate-limiting mechanism to prevent spam and ensure stable performance.
 
 ---
 
