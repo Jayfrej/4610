@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, session  # + session
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -17,15 +17,20 @@ from app.session_manager import SessionManager
 from app.symbol_mapper import SymbolMapper
 from app.email_handler import EmailHandler
 
-# ADDED: imports for trade history blueprint & helpers
-from trades import trades_bp, record_and_broadcast, init_trades  # ADDED
-
 # Load environment variables
 load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here')
+
+# ---- Session cookie config (for per-tab login via /login) ----
+SESSION_COOKIE_SECURE = False  # set True if you serve via HTTPS
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=SESSION_COOKIE_SECURE,
+)
 
 # Initialize rate limiter (alternative approach)
 try:
@@ -47,9 +52,6 @@ except TypeError:
 session_manager = SessionManager()
 symbol_mapper = SymbolMapper()
 email_handler = EmailHandler()
-
-# ADDED: register trade history blueprint
-app.register_blueprint(trades_bp)  # ADDED
 
 # Setup logging
 log_dir = "logs"
@@ -73,19 +75,39 @@ WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', 'default-token')
 EXTERNAL_BASE_URL = os.getenv('EXTERNAL_BASE_URL', 'http://localhost:5000')
 
 def basic_auth_required(f):
-    """Basic authentication decorator"""
+    """(kept for compatibility; no longer used on UI endpoints)"""
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
         if not auth or not (auth.username == BASIC_USER and auth.password == BASIC_PASS):
             logger.warning(f"[UNAUTHORIZED] Basic auth failed from {get_remote_address()}")
-            # หมายเหตุ: ถ้าต้องการ 'ไม่ส่งอีเมล' สำหรับเคสนี้ ให้พึ่ง suppression ใน email_handler แทนการแก้บรรทัดนี้
+            # NOTE: you earlier requested to suppress some emails from health checks/localhost.
             email_handler.send_alert("Unauthorized Access", f"Failed basic auth from {get_remote_address()}")
             return ('Unauthorized', 401, {
-                'WWW-Authenticate': 'Basic realm="Login Required"'
+                'WWW-Authenticate': 'Basic realm=\"Login Required\"'
             })
         return f(*args, **kwargs)
     return decorated
+
+# ---- New: session-based login for UI APIs ----
+def session_login_required(f):
+    @wraps(f)
+    def _wrap(*args, **kwargs):
+        if not session.get('auth'):
+            return jsonify({'error': 'Auth required'}), 401
+        return f(*args, **kwargs)
+    return _wrap
+
+@app.post('/login')
+def login_api():
+    """Lightweight login for UI (per-tab via sessionStorage on client)"""
+    data = request.get_json(silent=True) or {}
+    user = data.get('username', '')
+    pwd = data.get('password', '')
+    if user == BASIC_USER and pwd == BASIC_PASS:
+        session['auth'] = True
+        return jsonify({'ok': True})
+    return jsonify({'ok': False, 'error': 'Invalid credentials'}), 401
 
 def monitor_instances():
     """Background thread to monitor instance status"""
@@ -132,14 +154,13 @@ def not_found(error):
     logger.warning(f"[NOT_FOUND] {request.method} {request.path} from {get_remote_address()}")
     return jsonify({'error': 'Endpoint not found'}), 404
 
+# ---- UI pages: allow loading page/assets without auth so JS can prompt /login ----
 @app.route('/')
-@basic_auth_required
 def index():
     """Main UI page"""
     return send_from_directory('static', 'index.html')
 
 @app.route('/static/<path:filename>')
-@basic_auth_required
 def static_files(filename):
     """Serve static files"""
     return send_from_directory('static', filename)
@@ -190,8 +211,9 @@ def webhook_info():
         'timestamp': datetime.now().isoformat()
     })
 
+# ---- UI APIs: now protected with session_login_required ----
 @app.route('/accounts', methods=['GET'])
-@basic_auth_required
+@session_login_required
 def get_accounts():
     """Get all accounts for UI table"""
     try:
@@ -202,7 +224,7 @@ def get_accounts():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/accounts', methods=['POST'])
-@basic_auth_required
+@session_login_required
 def add_account():
     """Add new account"""
     try:
@@ -231,7 +253,7 @@ def add_account():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/accounts/<account>/restart', methods=['POST'])
-@basic_auth_required
+@session_login_required
 def restart_account(account):
     """Restart account instance"""
     try:
@@ -246,7 +268,7 @@ def restart_account(account):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/accounts/<account>/stop', methods=['POST'])
-@basic_auth_required
+@session_login_required
 def stop_account(account):
     """Stop account instance"""
     try:
@@ -261,7 +283,7 @@ def stop_account(account):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/accounts/<account>/open', methods=['POST'])
-@basic_auth_required
+@session_login_required
 def open_account(account):
     """Open/Start account instance if offline"""
     try:
@@ -282,7 +304,7 @@ def open_account(account):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/accounts/<account>', methods=['DELETE'])
-@basic_auth_required
+@session_login_required
 def delete_account(account):
     """Delete account"""
     try:
@@ -297,7 +319,7 @@ def delete_account(account):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/webhook-url')
-@basic_auth_required
+@session_login_required
 def get_webhook_url():
     """Get webhook URL for copy button"""
     webhook_url = f"{EXTERNAL_BASE_URL}/webhook/{WEBHOOK_TOKEN}"
@@ -461,27 +483,11 @@ def process_webhook(data):
             if not session_manager.account_exists(account):
                 logger.warning(f"[ACCOUNT_NOT_FOUND] Account {account} not found")
                 results.append({'account': account, 'success': False, 'error': 'Account not found'})
-                # ADDED: broadcast error for history
-                record_and_broadcast({
-                    'status': 'error',
-                    'action': action,
-                    'symbol': data.get('symbol'),
-                    'account_number': account,
-                    'message': 'Account not found'
-                })  # ADDED
                 continue
             
             if not session_manager.is_instance_alive(account):
                 logger.warning(f"[ACCOUNT_OFFLINE] Account {account} is offline")
                 results.append({'account': account, 'success': False, 'error': 'Account is offline'})
-                # ADDED: broadcast error for history
-                record_and_broadcast({
-                    'status': 'error',
-                    'action': action,
-                    'symbol': data.get('symbol'),
-                    'account_number': account,
-                    'message': 'Account is offline'
-                })  # ADDED
                 continue
             
             # Prepare command
@@ -492,29 +498,6 @@ def process_webhook(data):
             
             # Write command to file for EA to process
             file_result = write_command_for_ea(account, command)
-
-            # ADDED: broadcast to History (success/error per account)
-            if file_result:
-                record_and_broadcast({
-                    'status': 'success',
-                    'action': action,
-                    'symbol': command.get('symbol', data.get('symbol')),
-                    'account_number': account,
-                    'volume': command.get('volume'),
-                    'price': command.get('price'),
-                    'message': 'Command written for EA'
-                })
-            else:
-                record_and_broadcast({
-                    'status': 'error',
-                    'action': action,
-                    'symbol': command.get('symbol', data.get('symbol')),
-                    'account_number': account,
-                    'volume': command.get('volume'),
-                    'message': 'Failed to write command for EA'
-                })
-            # END ADDED
-
             results.append({
                 'account': account, 
                 'success': file_result, 
@@ -687,7 +670,7 @@ def write_command_for_ea(account, command):
         return False
 
 @app.route('/diagnose')
-@basic_auth_required
+@session_login_required
 def diagnose_system():
     """Diagnose system configuration"""
     try:
@@ -712,10 +695,6 @@ if __name__ == '__main__':
     
     # Send startup notification
     email_handler.send_startup_notification()
-
-    # ADDED: warm up trade history buffer from file
-    with app.app_context():
-        init_trades()  # ADDED
     
     app.run(
         host='0.0.0.0',
