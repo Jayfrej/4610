@@ -7,6 +7,7 @@ class TradingBotUI {
     this.refreshInterval = null;
     this.currentExampleIndex = 0;
 
+    // History Log state
     this.tradeHistory = [];
     this.maxHistoryItems = 100;
     this._es = null;
@@ -80,6 +81,30 @@ this.jsonExamples = [
     this.init();
   }
 
+  /* ---------- Login per-tab (Method 1) ---------- */
+  async ensureLogin() {
+    // ถ้าแท็บนี้เคยล็อกอินแล้ว ไม่ต้องถามซ้ำ
+    if (sessionStorage.getItem('tab-auth') === '1') return;
+
+    const u = prompt('Username:');
+    const p = prompt('Password:');
+    if (!u || !p) { location.reload(); return; }
+
+    const res = await fetch('/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ username: u, password: p })
+    });
+
+    if (!res.ok) {
+      alert('Login failed');
+      location.reload();
+      return;
+    }
+    // บันทึกเฉพาะในแท็บนี้
+    sessionStorage.setItem('tab-auth', '1');
+  }
+
   /* ---------- Theme ---------- */
   initTheme() {
     const saved = localStorage.getItem('theme');
@@ -116,14 +141,18 @@ this.jsonExamples = [
   init() {
     this.initTheme();
     this.setupEventListeners();
-    this.loadData();
-    this.startAutoRefresh();
-    this.updateLastUpdateTime();
-    this.showExample(0);
 
-    this.renderHistory();
-    this.loadInitialHistoryFromServer().then(() => {
-      this.subscribeTradeEvents();
+    // เรียก login per-tab ก่อน แล้วค่อยโหลดข้อมูล
+    this.ensureLogin().then(() => {
+      this.loadData();
+      this.startAutoRefresh();
+      this.updateLastUpdateTime();
+      this.showExample(0);
+
+      this.renderHistory();
+      this.loadInitialHistoryFromServer().then(() => {
+        this.subscribeTradeEvents();
+      });
     });
   }
 
@@ -486,6 +515,7 @@ this.jsonExamples = [
     }
   }
 
+  // ---- History Log (initial load + SSE live updates) ----
   async loadInitialHistoryFromServer() {
     try {
       const res = await fetch('/trades?limit=100');
@@ -582,25 +612,21 @@ this.jsonExamples = [
     }[s]));
   }
 
-  // <<< Added: Clear history >>>
   async clearHistory() {
     const ok = await this.showConfirmDialog('Clear Trading History', 'Delete all saved trade history? This cannot be undone.');
     if (!ok) return;
 
-    // ลองลบที่ฝั่งเซิร์ฟเวอร์ก่อน (ถ้ามี endpoint รองรับ)
     let serverCleared = false;
     try {
       const res = await fetch('/trades/clear', { method: 'POST' });
       serverCleared = res.ok;
     } catch (_) { /* ignore */ }
 
-    // ไม่ว่าฝั่งเซิร์ฟเวอร์จะลบได้รึเปล่า เคลียร์ฝั่ง UI ให้เสร็จ
     this.tradeHistory = [];
     this.renderHistory();
 
     this.showToast(serverCleared ? 'History cleared.' : 'History cleared locally.', 'success');
   }
-  // >>> end
 
   cleanup() { 
     this.stopAutoRefresh(); 
