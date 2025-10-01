@@ -83,7 +83,6 @@ this.jsonExamples = [
 
   /* ---------- Login per-tab (Method 1) ---------- */
   async ensureLogin() {
-    // ถ้าแท็บนี้เคยล็อกอินแล้ว ไม่ต้องถามซ้ำ
     if (sessionStorage.getItem('tab-auth') === '1') return;
 
     const u = prompt('Username:');
@@ -101,7 +100,6 @@ this.jsonExamples = [
       location.reload();
       return;
     }
-    // บันทึกเฉพาะในแท็บนี้
     sessionStorage.setItem('tab-auth', '1');
   }
 
@@ -142,7 +140,6 @@ this.jsonExamples = [
     this.initTheme();
     this.setupEventListeners();
 
-    // เรียก login per-tab ก่อน แล้วค่อยโหลดข้อมูล
     this.ensureLogin().then(() => {
       this.loadData();
       this.startAutoRefresh();
@@ -151,6 +148,7 @@ this.jsonExamples = [
 
       this.renderHistory();
       this.loadInitialHistoryFromServer().then(() => {
+        this.updateAccountFilterOptions();
         this.subscribeTradeEvents();
       });
     });
@@ -191,9 +189,11 @@ this.jsonExamples = [
     window.addEventListener('offline', () => { this.showToast('Connection lost', 'warning'); });
 
     const historyFilter = document.getElementById('historyFilter');
-    if (historyFilter) historyFilter.addEventListener('change', () => {
-      this.renderHistory();
-    });
+    if (historyFilter) historyFilter.addEventListener('change', () => this.renderHistory());
+
+    // NEW: account filter change
+    const accountFilter = document.getElementById('accountFilter');
+    if (accountFilter) accountFilter.addEventListener('change', () => this.renderHistory());
   }
 
   /* ---------- Data ---------- */
@@ -210,6 +210,7 @@ this.jsonExamples = [
         this.accounts = accountsData.accounts || [];
         this.updateAccountsTable();
         this.updateStats();
+        this.updateAccountFilterOptions();   // NEW: เติมตัวเลือกบัญชีจากรายชื่อบัญชีที่มี
       }
 
       if (webhookResponse.ok) {
@@ -564,19 +565,48 @@ this.jsonExamples = [
     if (this.tradeHistory.length > this.maxHistoryItems) {
       this.tradeHistory.pop();
     }
+    this.updateAccountFilterOptions();   // NEW: อัปเดตรายการบัญชีเมื่อมีรายการใหม่
     this.renderHistory();
+  }
+
+  // NEW: เติมตัวเลือก Account โดยดึงจาก history + รายชื่อ accounts ที่โหลดมา
+  updateAccountFilterOptions() {
+    const sel = document.getElementById('accountFilter');
+    if (!sel) return;
+
+    const current = sel.value || 'all';
+    const fromHistory = this.tradeHistory
+      .map(t => String(t.account || '').trim())
+      .filter(Boolean);
+    const fromAccounts = (this.accounts || []).map(a => String(a.account).trim()).filter(Boolean);
+    const all = Array.from(new Set([...fromHistory, ...fromAccounts])).sort((a,b)=>a.localeCompare(b));
+
+    const html = ['<option value="all">All Accounts</option>']
+      .concat(all.map(acc => `<option value="${this.escape(acc)}">${this.escape(acc)}</option>`))
+      .join('');
+    sel.innerHTML = html;
+
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
+    else sel.value = 'all';
   }
 
   renderHistory() {
     const tbody = document.getElementById('historyTableBody');
     if (!tbody) return;
-    const filterEl = document.getElementById('historyFilter');
-    const filter = (filterEl?.value || 'all').toLowerCase();
+
+    const statusSel = document.getElementById('historyFilter');
+    const statusFilter = (statusSel?.value || 'all').toLowerCase();
+
+    const accSel = document.getElementById('accountFilter');           // NEW
+    const accountFilter = (accSel?.value || 'all').toLowerCase();      // NEW
+
     const list = this.tradeHistory.filter(t => {
-      if (filter === 'success') return t.status === 'success';
-      if (filter === 'error')   return t.status === 'error';
+      if (statusFilter === 'success' && t.status !== 'success') return false;
+      if (statusFilter === 'error' && t.status !== 'error') return false;
+      if (accountFilter !== 'all' && String(t.account).toLowerCase() !== accountFilter) return false; // NEW
       return true;
     });
+
     if (!list.length) {
       tbody.innerHTML = `
         <tr class="no-data">
@@ -620,16 +650,17 @@ this.jsonExamples = [
     try {
       const res = await fetch('/trades/clear', { method: 'POST' });
       serverCleared = res.ok;
-    } catch (_) { /* ignore */ }
+    } catch (_) {}
 
     this.tradeHistory = [];
     this.renderHistory();
+    this.updateAccountFilterOptions();  // รีเฟรชรายการบัญชีหลังเคลียร์
 
     this.showToast(serverCleared ? 'History cleared.' : 'History cleared locally.', 'success');
   }
 
-  cleanup() { 
-    this.stopAutoRefresh(); 
+  cleanup() {
+    this.stopAutoRefresh();
     if (this._es) { try { this._es.close(); } catch {} }
   }
 }
