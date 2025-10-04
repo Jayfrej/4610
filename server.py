@@ -289,6 +289,15 @@ def delete_account(account):
         success = session_manager.delete_instance(account)
         if success:
             logger.info(f"[ACCOUNT_DELETED] Account {account}")
+            
+            # ✅ ลบ trade history ของ account นี้ด้วย
+            try:
+                from trades import delete_account_history
+                deleted_count = delete_account_history(account)
+                logger.info(f"[HISTORY_DELETED] Removed {deleted_count} trades for account {account}")
+            except Exception as e:
+                logger.warning(f"[HISTORY_DELETE_ERROR] {str(e)}")
+            
             return jsonify({'success': True, 'message': 'Account deleted successfully'})
         else:
             return jsonify({'error': 'Failed to delete account'}), 500
