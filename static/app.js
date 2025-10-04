@@ -191,7 +191,6 @@ this.jsonExamples = [
     const historyFilter = document.getElementById('historyFilter');
     if (historyFilter) historyFilter.addEventListener('change', () => this.renderHistory());
 
-    // NEW: account filter change
     const accountFilter = document.getElementById('accountFilter');
     if (accountFilter) accountFilter.addEventListener('change', () => this.renderHistory());
   }
@@ -210,7 +209,7 @@ this.jsonExamples = [
         this.accounts = accountsData.accounts || [];
         this.updateAccountsTable();
         this.updateStats();
-        this.updateAccountFilterOptions();   // NEW: เติมตัวเลือกบัญชีจากรายชื่อบัญชีที่มี
+        this.updateAccountFilterOptions();
       }
 
       if (webhookResponse.ok) {
@@ -536,8 +535,28 @@ this.jsonExamples = [
       const es = new EventSource('/events/trades');
       es.onmessage = (evt) => {
         try {
-          const tr = JSON.parse(evt.data);
-          this.addTradeToHistory(tr);
+          const data = JSON.parse(evt.data);
+          
+          // ✅ รับ event พิเศษ
+          if (data.event === 'history_cleared') {
+            this.tradeHistory = [];
+            this.renderHistory();
+            this.updateAccountFilterOptions();
+            return;
+          }
+          
+          if (data.event === 'account_deleted' && data.account) {
+            // ลบ trades ของ account นี้ออก
+            this.tradeHistory = this.tradeHistory.filter(t => 
+              String(t.account) !== String(data.account)
+            );
+            this.renderHistory();
+            this.updateAccountFilterOptions();
+            return;
+          }
+          
+          // ปกติ - เพิ่ม trade ใหม่
+          this.addTradeToHistory(data);
         } catch (e) { console.warn('Invalid trade event:', e); }
       };
       es.onerror = () => {};
@@ -565,11 +584,10 @@ this.jsonExamples = [
     if (this.tradeHistory.length > this.maxHistoryItems) {
       this.tradeHistory.pop();
     }
-    this.updateAccountFilterOptions();   // NEW: อัปเดตรายการบัญชีเมื่อมีรายการใหม่
+    this.updateAccountFilterOptions();
     this.renderHistory();
   }
 
-  // NEW: เติมตัวเลือก Account โดยดึงจาก history + รายชื่อ accounts ที่โหลดมา
   updateAccountFilterOptions() {
     const sel = document.getElementById('accountFilter');
     if (!sel) return;
@@ -597,13 +615,13 @@ this.jsonExamples = [
     const statusSel = document.getElementById('historyFilter');
     const statusFilter = (statusSel?.value || 'all').toLowerCase();
 
-    const accSel = document.getElementById('accountFilter');           // NEW
-    const accountFilter = (accSel?.value || 'all').toLowerCase();      // NEW
+    const accSel = document.getElementById('accountFilter');
+    const accountFilter = (accSel?.value || 'all').toLowerCase();
 
     const list = this.tradeHistory.filter(t => {
       if (statusFilter === 'success' && t.status !== 'success') return false;
       if (statusFilter === 'error' && t.status !== 'error') return false;
-      if (accountFilter !== 'all' && String(t.account).toLowerCase() !== accountFilter) return false; // NEW
+      if (accountFilter !== 'all' && String(t.account).toLowerCase() !== accountFilter) return false;
       return true;
     });
 
@@ -646,17 +664,22 @@ this.jsonExamples = [
     const ok = await this.showConfirmDialog('Clear Trading History', 'Delete all saved trade history? This cannot be undone.');
     if (!ok) return;
 
-    let serverCleared = false;
     try {
-      const res = await fetch('/trades/clear', { method: 'POST' });
-      serverCleared = res.ok;
-    } catch (_) {}
+      const res = await fetch('/trades/clear?confirm=1', { method: 'POST' });
+      const serverCleared = res.ok;
 
-    this.tradeHistory = [];
-    this.renderHistory();
-    this.updateAccountFilterOptions();  // รีเฟรชรายการบัญชีหลังเคลียร์
-
-    this.showToast(serverCleared ? 'History cleared.' : 'History cleared locally.', 'success');
+      if (serverCleared) {
+        this.tradeHistory = [];
+        this.renderHistory();
+        this.updateAccountFilterOptions();
+        this.showToast('History cleared successfully', 'success');
+      } else {
+        this.showToast('Failed to clear history', 'error');
+      }
+    } catch (e) {
+      console.error('Clear history error:', e);
+      this.showToast('Failed to clear history', 'error');
+    }
   }
 
   cleanup() {
