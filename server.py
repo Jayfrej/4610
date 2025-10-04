@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory, session  # + session
+from flask import Flask, request, jsonify, send_from_directory, session
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from app.session_manager import SessionManager
 from app.symbol_mapper import SymbolMapper
 from app.email_handler import EmailHandler
+from app.trades import trades_bp, init_trades, record_and_broadcast  
 
 # Load environment variables
 load_dotenv()
@@ -24,24 +25,22 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here')
 
-# ---- Session cookie config (for per-tab login via /login) ----
-SESSION_COOKIE_SECURE = False  # set True if you serve via HTTPS
+# Session cookie config
+SESSION_COOKIE_SECURE = False
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=SESSION_COOKIE_SECURE,
 )
 
-# Initialize rate limiter (alternative approach)
+# Initialize rate limiter
 try:
-    # Try new Flask-Limiter API
     limiter = Limiter(
         key_func=get_remote_address,
         default_limits=["100 per hour"]
     )
     limiter.init_app(app)
 except TypeError:
-    # Fallback to old API
     limiter = Limiter(
         app,
         key_func=get_remote_address,
@@ -74,14 +73,15 @@ BASIC_PASS = os.getenv('BASIC_PASS', 'pass')
 WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', 'default-token')
 EXTERNAL_BASE_URL = os.getenv('EXTERNAL_BASE_URL', 'http://localhost:5000')
 
+# ✅ Register trades blueprint
+app.register_blueprint(trades_bp)
+
 def basic_auth_required(f):
-    """(kept for compatibility; no longer used on UI endpoints)"""
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
         if not auth or not (auth.username == BASIC_USER and auth.password == BASIC_PASS):
             logger.warning(f"[UNAUTHORIZED] Basic auth failed from {get_remote_address()}")
-            # NOTE: you earlier requested to suppress some emails from health checks/localhost.
             email_handler.send_alert("Unauthorized Access", f"Failed basic auth from {get_remote_address()}")
             return ('Unauthorized', 401, {
                 'WWW-Authenticate': 'Basic realm=\"Login Required\"'
@@ -89,7 +89,6 @@ def basic_auth_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# ---- New: session-based login for UI APIs ----
 def session_login_required(f):
     @wraps(f)
     def _wrap(*args, **kwargs):
@@ -100,7 +99,6 @@ def session_login_required(f):
 
 @app.post('/login')
 def login_api():
-    """Lightweight login for UI (per-tab via sessionStorage on client)"""
     data = request.get_json(silent=True) or {}
     user = data.get('username', '')
     pwd = data.get('password', '')
@@ -110,7 +108,6 @@ def login_api():
     return jsonify({'ok': False, 'error': 'Invalid credentials'}), 401
 
 def monitor_instances():
-    """Background thread to monitor instance status"""
     while True:
         try:
             accounts = session_manager.get_all_accounts()
@@ -123,18 +120,16 @@ def monitor_instances():
                 else:
                     new_status = 'Offline'
                 
-                # Update status if changed
                 if old_status != new_status:
                     session_manager.update_account_status(account, new_status)
                     logger.info(f"[STATUS_CHANGE] Account {account}: {old_status} -> {new_status}")
                     
-                    # Send email notification
                     if new_status == 'Offline' and old_status == 'Online':
                         email_handler.send_alert("Instance Offline", f"Account {account} went offline")
                     elif new_status == 'Online' and old_status == 'Offline':
                         email_handler.send_alert("Instance Online", f"Account {account} came online")
             
-            time.sleep(30)  # Check every 30 seconds
+            time.sleep(30)
         except Exception as e:
             logger.error(f"[MONITOR_ERROR] {str(e)}")
             time.sleep(60)
@@ -154,20 +149,16 @@ def not_found(error):
     logger.warning(f"[NOT_FOUND] {request.method} {request.path} from {get_remote_address()}")
     return jsonify({'error': 'Endpoint not found'}), 404
 
-# ---- UI pages: allow loading page/assets without auth so JS can prompt /login ----
 @app.route('/')
 def index():
-    """Main UI page"""
     return send_from_directory('static', 'index.html')
 
 @app.route('/static/<path:filename>')
 def static_files(filename):
-    """Serve static files"""
     return send_from_directory('static', filename)
 
 @app.route('/health', methods=['GET', 'HEAD'])
 def health_check():
-    """Health check endpoint for uptime monitoring"""
     try:
         accounts = session_manager.get_all_accounts()
         online_count = sum(1 for acc in accounts if acc.get('status') == 'Online')
@@ -191,7 +182,6 @@ def health_check():
 
 @app.route('/webhook/health', methods=['GET', 'HEAD'])
 def webhook_health():
-    """Dedicated health check for webhook endpoint"""
     return jsonify({
         'status': 'ok',
         'webhook_status': 'active',
@@ -201,7 +191,6 @@ def webhook_health():
 @app.route('/webhook/', methods=['GET'])
 @app.route('/webhook', methods=['GET'])
 def webhook_info():
-    """Webhook endpoint information"""
     return jsonify({
         'message': 'Webhook endpoint active',
         'supported_methods': ['POST'],
@@ -211,11 +200,9 @@ def webhook_info():
         'timestamp': datetime.now().isoformat()
     })
 
-# ---- UI APIs: now protected with session_login_required ----
 @app.route('/accounts', methods=['GET'])
 @session_login_required
 def get_accounts():
-    """Get all accounts for UI table"""
     try:
         accounts = session_manager.get_all_accounts()
         return jsonify({'accounts': accounts})
@@ -226,7 +213,6 @@ def get_accounts():
 @app.route('/accounts', methods=['POST'])
 @session_login_required
 def add_account():
-    """Add new account"""
     try:
         data = request.get_json()
         account = data.get('account', '').strip()
@@ -235,11 +221,9 @@ def add_account():
         if not account:
             return jsonify({'error': 'Account number is required'}), 400
         
-        # Check if account already exists
         if session_manager.account_exists(account):
             return jsonify({'error': 'Account already exists'}), 400
         
-        # Create instance
         success = session_manager.create_instance(account, nickname)
         if success:
             logger.info(f"[ACCOUNT_ADDED] Account {account} ({nickname}) created successfully")
@@ -255,7 +239,6 @@ def add_account():
 @app.route('/accounts/<account>/restart', methods=['POST'])
 @session_login_required
 def restart_account(account):
-    """Restart account instance"""
     try:
         success = session_manager.restart_instance(account)
         if success:
@@ -270,7 +253,6 @@ def restart_account(account):
 @app.route('/accounts/<account>/stop', methods=['POST'])
 @session_login_required
 def stop_account(account):
-    """Stop account instance"""
     try:
         success = session_manager.stop_instance(account)
         if success:
@@ -285,14 +267,11 @@ def stop_account(account):
 @app.route('/accounts/<account>/open', methods=['POST'])
 @session_login_required
 def open_account(account):
-    """Open/Start account instance if offline"""
     try:
         if session_manager.is_instance_alive(account):
-            # Already online, try to focus window
             session_manager.focus_instance(account)
             return jsonify({'success': True, 'message': 'Account is already online'})
         else:
-            # Start the instance
             success = session_manager.start_instance(account)
             if success:
                 logger.info(f"[ACCOUNT_OPENED] Account {account}")
@@ -306,7 +285,6 @@ def open_account(account):
 @app.route('/accounts/<account>', methods=['DELETE'])
 @session_login_required
 def delete_account(account):
-    """Delete account"""
     try:
         success = session_manager.delete_instance(account)
         if success:
@@ -321,22 +299,18 @@ def delete_account(account):
 @app.route('/webhook-url')
 @session_login_required
 def get_webhook_url():
-    """Get webhook URL for copy button"""
     webhook_url = f"{EXTERNAL_BASE_URL}/webhook/{WEBHOOK_TOKEN}"
     return jsonify({'url': webhook_url})
 
 @app.route('/webhook/<token>', methods=['POST'])
 @limiter.limit("10 per minute")
 def webhook_handler(token):
-    """Main webhook endpoint for trading signals"""
     try:
-        # Validate token
         if token != WEBHOOK_TOKEN:
             logger.warning(f"[UNAUTHORIZED] Invalid webhook token from {get_remote_address()}")
             email_handler.send_alert("Unauthorized Webhook Access", f"Invalid token from {get_remote_address()}")
             return jsonify({'error': 'Unauthorized'}), 401
         
-        # Parse JSON payload
         try:
             data = request.get_json()
             if not data:
@@ -346,17 +320,14 @@ def webhook_handler(token):
             email_handler.send_alert("Bad Webhook Payload", f"Invalid JSON from {get_remote_address()}: {str(e)}")
             return jsonify({'error': 'Invalid JSON payload'}), 400
         
-        # Log incoming webhook
         logger.info(f"[WEBHOOK] Received: {json.dumps(data, ensure_ascii=False)}")
         
-        # Validate required fields
         validation_result = validate_webhook_payload(data)
         if not validation_result['valid']:
             logger.error(f"[BAD_PAYLOAD] Validation failed: {validation_result['error']}")
             email_handler.send_alert("Bad Webhook Payload", f"Validation failed: {validation_result['error']}")
             return jsonify({'error': validation_result['error']}), 400
         
-        # Process webhook
         result = process_webhook(data)
         
         if result['success']:
@@ -373,39 +344,31 @@ def webhook_handler(token):
         return jsonify({'error': 'Internal server error'}), 500
 
 def validate_webhook_payload(data):
-    """Validate webhook payload - Updated to support close actions"""
     required_fields = ['action']
     
-    # Check for account(s)
     if 'account_number' not in data and 'accounts' not in data:
         return {'valid': False, 'error': 'Missing field: account_number or accounts'}
     
-    # Check required fields
     for field in required_fields:
         if field not in data:
             return {'valid': False, 'error': f'Missing field: {field}'}
     
-    # Validate action
     action = data['action'].upper()
     
     if action in ['BUY', 'SELL', 'LONG', 'SHORT']:
-        # Trading actions - require symbol and volume
         if 'symbol' not in data:
             return {'valid': False, 'error': 'symbol required for trading actions'}
         if 'volume' not in data:
             return {'valid': False, 'error': 'volume required for trading actions'}
         
-        # Set default order_type if not provided
         if 'order_type' not in data:
             data['order_type'] = 'market'
         
-        # Validate order_type specific requirements
         order_type = data['order_type'].lower()
         if order_type in ['limit', 'stop']:
             if 'price' not in data:
                 return {'valid': False, 'error': f'price required for {order_type} orders'}
         
-        # Validate volume
         try:
             volume = float(data['volume'])
             if volume <= 0:
@@ -414,13 +377,10 @@ def validate_webhook_payload(data):
             return {'valid': False, 'error': 'Volume must be a number'}
             
     elif action in ['CLOSE', 'CLOSE_ALL', 'CLOSE_SYMBOL']:
-        # Close actions
         if action == 'CLOSE':
-            # Close specific position - requires ticket or symbol
             if 'ticket' not in data and 'symbol' not in data:
                 return {'valid': False, 'error': 'ticket or symbol required for CLOSE action'}
             
-            # Validate ticket if provided
             if 'ticket' in data:
                 try:
                     int(data['ticket'])
@@ -428,12 +388,9 @@ def validate_webhook_payload(data):
                     return {'valid': False, 'error': 'ticket must be a number'}
                     
         elif action == 'CLOSE_SYMBOL':
-            # Close all positions for specific symbol
             if 'symbol' not in data:
                 return {'valid': False, 'error': 'symbol required for CLOSE_SYMBOL action'}
-        # CLOSE_ALL doesn't need additional parameters
         
-        # Validate volume for partial close if provided
         if 'volume' in data:
             try:
                 volume = float(data['volume'])
@@ -442,7 +399,6 @@ def validate_webhook_payload(data):
             except (ValueError, TypeError):
                 return {'valid': False, 'error': 'Volume must be a number'}
         
-        # Validate position_type if provided
         if 'position_type' in data:
             position_type = data['position_type'].upper()
             if position_type not in ['BUY', 'SELL']:
@@ -455,9 +411,7 @@ def validate_webhook_payload(data):
     return {'valid': True}
 
 def process_webhook(data):
-    """Process validated webhook data - Updated to support close actions"""
     try:
-        # Get target accounts
         if 'accounts' in data:
             target_accounts = data['accounts']
         else:
@@ -466,7 +420,6 @@ def process_webhook(data):
         action = data['action'].upper()
         mapped_symbol = None
         
-        # Symbol mapping only for actions that need symbols
         if action in ['BUY', 'SELL', 'LONG', 'SHORT', 'CLOSE_SYMBOL'] or (action == 'CLOSE' and 'symbol' in data):
             original_symbol = data['symbol']
             mapped_symbol = symbol_mapper.map_symbol(original_symbol)
@@ -476,28 +429,60 @@ def process_webhook(data):
             
             logger.info(f"[SYMBOL_MAPPING] {original_symbol} → {mapped_symbol}")
         
-        # Process for each account
         results = []
         for account in target_accounts:
-            # Check if account exists and is online
             if not session_manager.account_exists(account):
                 logger.warning(f"[ACCOUNT_NOT_FOUND] Account {account} not found")
+                
+                # ✅ บันทึก error ลง history
+                record_and_broadcast({
+                    'status': 'error',
+                    'action': action,
+                    'symbol': data.get('symbol', '-'),
+                    'account': account,
+                    'volume': data.get('volume', ''),
+                    'price': data.get('price', ''),
+                    'message': 'Account not found',
+                })
+                
                 results.append({'account': account, 'success': False, 'error': 'Account not found'})
                 continue
             
             if not session_manager.is_instance_alive(account):
                 logger.warning(f"[ACCOUNT_OFFLINE] Account {account} is offline")
+                
+                # ✅ บันทึก error ลง history
+                record_and_broadcast({
+                    'status': 'error',
+                    'action': action,
+                    'symbol': data.get('symbol', '-'),
+                    'account': account,
+                    'volume': data.get('volume', ''),
+                    'price': data.get('price', ''),
+                    'message': 'Account is offline',
+                })
+                
                 results.append({'account': account, 'success': False, 'error': 'Account is offline'})
                 continue
             
-            # Prepare command
             command = prepare_trading_command(data, mapped_symbol, account)
             
-            # Log the command
             logger.info(f"[{action}_COMMAND] Account {account}: {json.dumps(command, ensure_ascii=False)}")
             
-            # Write command to file for EA to process
             file_result = write_command_for_ea(account, command)
+            
+            # ✅ บันทึก success ลง history
+            if file_result:
+                record_and_broadcast({
+                    'status': 'success',
+                    'action': action,
+                    'symbol': mapped_symbol or data.get('symbol', '-'),
+                    'account': account,
+                    'volume': data.get('volume', ''),
+                    'price': data.get('price', ''),
+                    'message': f'{action} command sent to EA',
+                })
+            
             results.append({
                 'account': account, 
                 'success': file_result, 
@@ -505,11 +490,9 @@ def process_webhook(data):
                 'action': action
             })
         
-        # Summarize results
         success_count = sum(1 for r in results if r['success'])
         total_count = len(results)
         
-        # Generate summary message based on action type
         if action in ['CLOSE', 'CLOSE_ALL', 'CLOSE_SYMBOL']:
             action_desc = {
                 'CLOSE': 'Close position',
@@ -530,10 +513,8 @@ def process_webhook(data):
         return {'success': False, 'error': str(e)}
 
 def prepare_trading_command(data, mapped_symbol, account):
-    """Prepare trading command structure - Updated to support close actions"""
     action = data['action'].upper()
     
-    # Base command structure
     command = {
         'timestamp': datetime.now().isoformat(),
         'account': account,
@@ -541,7 +522,6 @@ def prepare_trading_command(data, mapped_symbol, account):
     }
     
     if action in ['BUY', 'SELL', 'LONG', 'SHORT']:
-        # Trading actions
         if action in ['SELL', 'SHORT']:
             action = 'SELL'
         elif action in ['BUY', 'LONG']:
@@ -555,7 +535,6 @@ def prepare_trading_command(data, mapped_symbol, account):
             'volume': float(data['volume']),
         })
         
-        # Optional fields for trading
         if 'price' in data:
             command['price'] = float(data['price'])
         if 'take_profit' in data:
@@ -568,7 +547,6 @@ def prepare_trading_command(data, mapped_symbol, account):
             command['deviation'] = int(data['deviation'])
     
     elif action == 'CLOSE':
-        # Close specific position
         command['action'] = 'CLOSE'
         
         if 'ticket' in data:
@@ -578,61 +556,50 @@ def prepare_trading_command(data, mapped_symbol, account):
             command['symbol'] = mapped_symbol if mapped_symbol else data['symbol']
             command['original_symbol'] = data['symbol']
         
-        # Optional volume for partial close
         if 'volume' in data:
             try:
                 command['volume'] = float(data['volume'])
             except (ValueError, TypeError):
-                pass  # Ignore invalid volume, will close full position
+                pass
         
-        # Optional comment
         if 'comment' in data:
             command['comment'] = str(data['comment'])
     
     elif action == 'CLOSE_ALL':
-        # Close all positions
         command['action'] = 'CLOSE_ALL'
         
-        # Optional filter by position type
         if 'position_type' in data:
             position_type = data['position_type'].upper()
             if position_type in ['BUY', 'SELL']:
                 command['position_type'] = position_type
         
-        # Optional comment
         if 'comment' in data:
             command['comment'] = str(data['comment'])
     
     elif action == 'CLOSE_SYMBOL':
-        # Close all positions for specific symbol
         command.update({
             'action': 'CLOSE_SYMBOL',
             'symbol': mapped_symbol,
             'original_symbol': data['symbol'],
         })
         
-        # Optional filter by position type
         if 'position_type' in data:
             position_type = data['position_type'].upper()
             if position_type in ['BUY', 'SELL']:
                 command['position_type'] = position_type
         
-        # Optional comment
         if 'comment' in data:
             command['comment'] = str(data['comment'])
     
     return command
 
 def write_command_for_ea(account, command):
-    """Write trading command to file for EA to read"""
     try:
-        # Get instance path
         instance_path = session_manager.get_instance_path(account)
         if not instance_path or not os.path.exists(instance_path):
             logger.error(f"[FILE_WRITE_ERROR] Instance path not found for account {account}")
             return False
         
-        # Try both possible MQL5 Files locations
         files_dirs = [
             os.path.join(instance_path, 'MQL5', 'Files'),
             os.path.join(instance_path, 'Data', 'MQL5', 'Files')
@@ -655,7 +622,6 @@ def write_command_for_ea(account, command):
             logger.error(f"[FILE_WRITE_ERROR] Could not create MQL5/Files directory for account {account}")
             return False
         
-        # Write command to JSON file
         filename = f"webhook_command_{int(time.time())}.json"
         filepath = os.path.join(files_dir, filename)
         
@@ -672,7 +638,6 @@ def write_command_for_ea(account, command):
 @app.route('/diagnose')
 @session_login_required
 def diagnose_system():
-    """Diagnose system configuration"""
     try:
         diagnosis = session_manager.diagnose_profile_source()
         
@@ -692,6 +657,10 @@ if __name__ == '__main__':
     logger.info(f"[CONFIG] Webhook endpoint: /webhook/{WEBHOOK_TOKEN}")
     logger.info(f"[CONFIG] External URL: {EXTERNAL_BASE_URL}")
     logger.info(f"[CONFIG] Supported actions: BUY, SELL, LONG, SHORT, CLOSE, CLOSE_ALL, CLOSE_SYMBOL")
+    
+    # ✅ Initialize trade history
+    with app.app_context():
+        init_trades()
     
     # Send startup notification
     email_handler.send_startup_notification()
