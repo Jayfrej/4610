@@ -59,6 +59,13 @@ def _append_to_store(evt: Dict[str, Any]) -> None:
     with open(DATA_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(evt, ensure_ascii=False) + "\n")
 
+def _rewrite_store(events: List[Dict[str, Any]]) -> None:
+    """Rewrite entire file with filtered events"""
+    _ensure_data_folder()
+    with open(DATA_PATH, "w", encoding="utf-8") as f:
+        for evt in events:
+            f.write(json.dumps(evt, ensure_ascii=False) + "\n")
+
 def _normalize_event(evt: Dict[str, Any]) -> Dict[str, Any]:
     # fill defaults
     if "id" not in evt:
@@ -101,6 +108,58 @@ def record_and_broadcast(evt: Dict[str, Any]) -> None:
         for q in dead:
             if q in _clients:
                 _clients.remove(q)
+
+def delete_account_history(account: str) -> int:
+    """Delete all history for specific account. Returns count of deleted items."""
+    with _lock:
+        # Remove from buffer
+        original_count = len(_buffer)
+        _buffer_list = list(_buffer)
+        _buffer.clear()
+        
+        kept_count = 0
+        for evt in _buffer_list:
+            evt_account = str(evt.get("account", evt.get("account_number", "")))
+            if evt_account != str(account):
+                _buffer.append(evt)
+                kept_count += 1
+        
+        deleted_from_buffer = original_count - kept_count
+        
+        # Rewrite file without this account's trades
+        try:
+            if os.path.exists(DATA_PATH):
+                all_trades = []
+                with open(DATA_PATH, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            evt = json.loads(line)
+                            evt_account = str(evt.get("account", evt.get("account_number", "")))
+                            if evt_account != str(account):
+                                all_trades.append(evt)
+                        except Exception:
+                            continue
+                
+                _rewrite_store(all_trades)
+                current_app.logger.info(f"[TRADES] Deleted history for account {account}")
+        except Exception as e:
+            current_app.logger.error(f"[TRADES] Failed to delete account history: {e}", exc_info=True)
+        
+        # Broadcast update to all clients
+        try:
+            payload = f"data: {json.dumps({'event': 'account_deleted', 'account': account}, ensure_ascii=False)}\n\n"
+            for q in _clients:
+                try:
+                    q.put_nowait(payload)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        return deleted_from_buffer
 
 # ---- Filters & REST ------------------------------------------------------------
 
@@ -152,7 +211,6 @@ def get_trades():
 
     return jsonify({"trades": result, "count": len(result)})
 
-# Optional: clear endpoint (guard with your auth layer / admin UI)
 @trades_bp.route("/trades/clear", methods=["POST"])
 def clear_trades():
     """Clear file + buffer (require confirm=1)."""
@@ -163,10 +221,24 @@ def clear_trades():
         _buffer.clear()
         try:
             _ensure_data_folder()
-            open(DATA_PATH, "w", encoding="utf-8").close()
+            # ✅ ลบไฟล์จริงๆ แทนการเขียนทับด้วยไฟล์ว่าง
+            if os.path.exists(DATA_PATH):
+                os.remove(DATA_PATH)
+            current_app.logger.info("[TRADES] History cleared - file deleted")
         except Exception as e:
             current_app.logger.error(f"[TRADES] Clear failed: {e}", exc_info=True)
             return jsonify({"ok": False, "error": str(e)}), 500
+
+    # Broadcast clear event to all clients
+    try:
+        payload = f"data: {json.dumps({'event': 'history_cleared'}, ensure_ascii=False)}\n\n"
+        for q in _clients:
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     return jsonify({"ok": True})
 
@@ -213,7 +285,5 @@ def sse_trades():
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
-        # CORS as needed (same-origin normally OK):
-        # "Access-Control-Allow-Origin": "*",
     }
     return Response(stream_with_context(gen()), headers=headers)
