@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                          All-in-One EA.mq5       |
+//|                                           All-in-OneEA.mq5       |
 //|  Ultimate Concurrent EA with 3 Modes:                            |
 //|  1. File Bridge: Reads trade commands from local JSON files.     |
 //|  2. Webhook POST: Polls a URL for trade commands.                |
@@ -7,11 +7,12 @@
 //|     - Master mode sends signals for all trade actions             |
 //|       (Open, Close, Modify SL/TP, Place/Cancel Pending).         |
 //|                                                                  |
-//|  NEW (Scoped toggles):                                           |
-//|  - Webhook_CloseOppositeBeforeOpen: if true, for MARKET orders   |
-//|    received via Webhook, close opposite-side positions first.    |
-//|  - FileBridge_CloseOppositeBeforeOpen: same behavior but only    |
-//|    for File-Bridge commands.                                     |
+//|  FIXES & NEW                                                     |
+//|  - Robust handling of multi-command JSON (array or single obj).  |
+//|  - Per-channel toggle to close opposite side before MARKET open: |
+//|      * Webhook_CloseOppositeBeforeOpen                           |
+//|      * FileBridge_CloseOppositeBeforeOpen                        |
+//|  - Do NOT affect manual/click trading; logic scoped by channel.  |
 //+------------------------------------------------------------------+
 #property strict
 
@@ -24,16 +25,16 @@ input bool EnableCopyTradeMode   = true;  // Enable/disable Copy Trade mode
 // --- File Bridge Settings ---
 input group "=== File Bridge Settings ===";
 input bool   AutoLinkInstance    = true;
-input string InstanceRootPath    = "C:\\Path\\To\\Your\\Instances";  // root that contains <ACCOUNT>\MQL5\Files
+input string InstanceRootPath    = "C:\\Path\\To\\Your\\Instances";  // parent folder containing <ACCOUNT>\\MQL5\\Files
 input string FilePattern         = "webhook_command_*.json";
 input bool   DeleteAfterProcess  = true;
-input bool   FileBridge_CloseOppositeBeforeOpen = false; // FILE BRIDGE ONLY: close opposite side first (market only)
+input bool   FileBridge_CloseOppositeBeforeOpen = false; // FILE BRIDGE ONLY: close opposite side first (MARKET only)
 
 // --- Webhook POST Settings ---
 input group "=== Webhook POST Settings ===";
 input string WebhookURL          = "http://127.0.0.1:5000/webhook/TOKEN";
 input int    HttpTimeoutMs       = 10000;
-input bool   Webhook_CloseOppositeBeforeOpen = false; // WEBHOOK ONLY: close opposite side first (market only)
+input bool   Webhook_CloseOppositeBeforeOpen = false; // WEBHOOK ONLY: close opposite side first (MARKET only)
 
 // --- Copy Trading Settings ---
 input group "=== Copy Trading Settings ===";
@@ -129,6 +130,75 @@ string GetVal(const string json, const string key){
    string v=StringSubstr(json,i,q-i);
    StringTrimLeft(v); StringTrimRight(v);
    return v;
+}
+
+// Split top-level JSON into object items.
+// Supports: single object "{...}"  OR array "[{...},{...}]"
+// Returns number of items placed into 'items' array.
+int SplitJsonObjects(const string json, string &items[])
+{
+   ArrayResize(items, 0);
+   int n = (int)StringLen(json);
+   int i = NextNonSpace(json, 0);
+   if(i>=n) return 0;
+
+   int ch = StringGetCharacter(json, i);
+
+   // Case 1: single object
+   if(ch=='{')
+   {
+      ArrayResize(items, 1);
+      items[0] = json;
+      return 1;
+   }
+
+   // Case 2: array of objects
+   if(ch=='[')
+   {
+      bool inStr=false, esc=false;
+      int depth=0; // braces depth {}
+      int start=-1;
+      for(int k=i+1; k<n; ++k)
+      {
+         int c = StringGetCharacter(json, k);
+
+         if(inStr)
+         {
+            if(esc){ esc=false; continue; }
+            if(c=='\\'){ esc=true; continue; }
+            if(c=='"'){ inStr=false; }
+            continue;
+         }
+         else
+         {
+            if(c=='"'){ inStr=true; continue; }
+            if(c=='{')
+            {
+               if(depth==0) start=k;
+               depth++;
+            }
+            else if(c=='}')
+            {
+               depth--;
+               if(depth==0 && start>=0)
+               {
+                  int len = k - start + 1;
+                  string obj = StringSubstr(json, start, len);
+                  int sz = ArraySize(items);
+                  ArrayResize(items, sz+1);
+                  items[sz] = obj;
+                  start = -1;
+               }
+            }
+         }
+      }
+      return ArraySize(items);
+   }
+
+   // Fallback: treat as single object
+   ArrayResize(items, 1);
+   items[0] = json;
+   return 1;
 }
 
 //==================== Symbol helpers ====================
@@ -409,50 +479,59 @@ bool ProcessFromPath(const string base){
    string full = (base=="" ? found : base + "\\" + found);
    string js; if(!ReadAllText(full,js)){ Print("Cannot read ",full," err=",GetLastError()); return true; }
 
-   // parse
-   string sym=GetVal(js,"broker_symbol"); if(sym=="") sym=GetVal(js,"symbol"); if(sym=="") sym=GetVal(js,"original_symbol");
-   string action=ToLower(GetVal(js,"action"));
-   if(action=="long")  action="buy";
-   if(action=="short") action="sell";
-   string otype =ToLower(GetVal(js,"order_type"));
-   string comment=GetVal(js,"comment"); if(comment=="") comment=TradeComment;
-   double vol = StringToDouble(GetVal(js,"volume")); if(vol<=0) vol=DefaultVolume;
+   // Split into top-level command objects (a single file may contain multiple commands)
+   string cmds[]; int cnt = SplitJsonObjects(js, cmds);
+   if(cnt<=0){ Print("FILEBRIDGE: invalid json in ", found); CleanupFile(full); return true; }
+   if(cnt>1)  PrintFormat("FILEBRIDGE: %d commands found in %s", cnt, found);
 
-   string tp_s = GetVal(js,"tp"); if(tp_s=="") tp_s=GetVal(js,"take_profit");
-   string sl_s = GetVal(js,"sl"); if(sl_s=="") sl_s=GetVal(js,"stop_loss");
-   double tp = StringToDouble(tp_s);
-   double sl = StringToDouble(sl_s);
-   double price = StringToDouble(GetVal(js,"price"));
-   string exp   = GetVal(js,"expiration");
-
-   // close command
-   string cmdtype = ToLower(GetVal(js,"command_type"));
-   if(action=="close" || cmdtype=="close_position"){
-      double reqVol = StringToDouble(GetVal(js,"volume"));
-      ClosePositionsByAmount(sym, reqVol);
-      CleanupFile(full);
-      return true;
-   }
-
-   if(action!="buy" && action!="sell"){
-      Print("Unknown action in ",found,": ",action); CleanupFile(full); return true;
-   }
-
-   // FILE-BRIDGE ONLY toggle (market only)
-   if(FileBridge_CloseOppositeBeforeOpen && (otype=="" || otype=="market"))
+   for(int idx=0; idx<cnt; ++idx)
    {
-      ENUM_POSITION_TYPE toClose = (action=="buy") ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-      ClosePositionsByType(sym, toClose);
+      string obj = cmds[idx];
+
+      string sym=GetVal(obj,"broker_symbol"); if(sym=="") sym=GetVal(obj,"symbol"); if(sym=="") sym=GetVal(obj,"original_symbol");
+      string action=ToLower(GetVal(obj,"action"));
+      if(action=="long")  action="buy";
+      if(action=="short") action="sell";
+      string otype =ToLower(GetVal(obj,"order_type"));
+      string comment=GetVal(obj,"comment"); if(comment=="") comment=TradeComment;
+      double vol = StringToDouble(GetVal(obj,"volume")); if(vol<=0) vol=DefaultVolume;
+
+      string tp_s = GetVal(obj,"tp"); if(tp_s=="") tp_s=GetVal(obj,"take_profit");
+      string sl_s = GetVal(obj,"sl"); if(sl_s=="") sl_s=GetVal(obj,"stop_loss");
+      double tp = StringToDouble(tp_s);
+      double sl = StringToDouble(sl_s);
+      double price = StringToDouble(GetVal(obj,"price"));
+      string exp   = GetVal(obj,"expiration");
+
+      string cmdtype = ToLower(GetVal(obj,"command_type"));
+      if(action=="close" || cmdtype=="close_position"){
+         double reqVol = StringToDouble(GetVal(obj,"volume"));
+         ClosePositionsByAmount(sym, reqVol);
+         continue;
+      }
+
+      if(action!="buy" && action!="sell"){
+         Print("FILEBRIDGE: unknown action in ",found,": ",action); 
+         continue;
+      }
+
+      // FILE-BRIDGE ONLY toggle (market only)
+      if(FileBridge_CloseOppositeBeforeOpen && (otype=="" || otype=="market"))
+      {
+         ENUM_POSITION_TYPE toClose = (action=="buy") ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+         ClosePositionsByType(sym, toClose);
+      }
+
+      SendOrderAdvanced(action, otype, sym, vol, price, sl, tp, comment, exp);
    }
 
-   SendOrderAdvanced(action, otype, sym, vol, price, sl, tp, comment, exp);
    CleanupFile(full);
    return true;
 }
 void ProcessOneFile(){
    if(!g_readyFB) return;
    if(g_instanceSub!="" && ProcessFromPath(g_instanceSub)) return; // instance_<account>
-   ProcessFromPath("");                                            // root of MQL5\Files
+   ProcessFromPath("");                                            // root of MQL5\\Files
 }
 
 //==================== Webhook (POST JSON) & Copy Trading Communication ====================
@@ -475,38 +554,50 @@ void PollWebhook(){
    string resp=""; int code=PostJSON(WebhookURL,req,resp);
    if(code!=200 || resp=="") return;
 
-   string sym=GetVal(resp,"broker_symbol"); if(sym=="") sym=GetVal(resp,"symbol"); if(sym=="") sym=GetVal(resp,"original_symbol");
-   string action=ToLower(GetVal(resp,"action"));
-   if(action=="long")  action="buy";
-   if(action=="short") action="sell";
-   string otype=ToLower(GetVal(resp,"order_type"));
-   string comment=GetVal(resp,"comment"); if(comment=="") comment=TradeComment;
-   double vol=StringToDouble(GetVal(resp,"volume")); if(vol<=0) vol=DefaultVolume;
+   // Split into top-level command objects
+   string cmds[]; int cnt = SplitJsonObjects(resp, cmds);
+   if(cnt<=0){ Print("WEBHOOK: no command objects found"); return; }
+   if(cnt>1)  PrintFormat("WEBHOOK: %d commands received in one response", cnt);
 
-   string tp_s=GetVal(resp,"tp"); if(tp_s=="") tp_s=GetVal(resp,"take_profit");
-   string sl_s=GetVal(resp,"sl"); if(sl_s=="") sl_s=GetVal(resp,"stop_loss");
-   double tp=StringToDouble(tp_s), sl=StringToDouble(sl_s);
-   double price=StringToDouble(GetVal(resp,"price"));
-   string exp=GetVal(resp,"expiration");
-
-   // explicit close
-   string cmdtype = ToLower(GetVal(resp,"command_type"));
-   if(action=="close" || cmdtype=="close_position"){
-      double reqVol=StringToDouble(GetVal(resp,"volume"));
-      ClosePositionsByAmount(sym, reqVol);
-      return;
-   }
-
-   if(action!="buy" && action!="sell"){ Print("Unknown action from webhook: ",action); return; }
-
-   // WEBHOOK ONLY toggle (market only)
-   if(Webhook_CloseOppositeBeforeOpen && (otype=="" || otype=="market"))
+   for(int idx=0; idx<cnt; ++idx)
    {
-      ENUM_POSITION_TYPE toClose = (action=="buy") ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-      ClosePositionsByType(sym, toClose);
-   }
+      string obj = cmds[idx];
 
-   SendOrderAdvanced(action, otype, sym, vol, price, sl, tp, comment, exp);
+      string sym=GetVal(obj,"broker_symbol"); if(sym=="") sym=GetVal(obj,"symbol"); if(sym=="") sym=GetVal(obj,"original_symbol");
+      string action=ToLower(GetVal(obj,"action"));
+      if(action=="long")  action="buy";
+      if(action=="short") action="sell";
+      string otype=ToLower(GetVal(obj,"order_type"));
+      string comment=GetVal(obj,"comment"); if(comment=="") comment=TradeComment;
+      double vol=StringToDouble(GetVal(obj,"volume")); if(vol<=0) vol=DefaultVolume;
+
+      string tp_s=GetVal(obj,"tp"); if(tp_s=="") tp_s=GetVal(obj,"take_profit");
+      string sl_s=GetVal(obj,"sl"); if(sl_s=="") sl_s=GetVal(obj,"stop_loss");
+      double tp=StringToDouble(tp_s), sl=StringToDouble(sl_s);
+      double price=StringToDouble(GetVal(obj,"price"));
+      string exp=GetVal(obj,"expiration");
+
+      string cmdtype = ToLower(GetVal(obj,"command_type"));
+      if(action=="close" || cmdtype=="close_position"){
+         double reqVol=StringToDouble(GetVal(obj,"volume"));
+         ClosePositionsByAmount(sym, reqVol);
+         continue;
+      }
+
+      if(action!="buy" && action!="sell"){
+         Print("WEBHOOK: unknown action: ",action); 
+         continue;
+      }
+
+      // WEBHOOK ONLY toggle (market only)
+      if(Webhook_CloseOppositeBeforeOpen && (otype=="" || otype=="market"))
+      {
+         ENUM_POSITION_TYPE toClose = (action=="buy") ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+         ClosePositionsByType(sym, toClose);
+      }
+
+      SendOrderAdvanced(action, otype, sym, vol, price, sl, tp, comment, exp);
+   }
 }
 
 //==================== Copy Trading Logic ====================
@@ -684,7 +775,6 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 
    if(trans.type == TRADE_TRANSACTION_ORDER_ADD)
    {
-      // New pending
       if(OrderSelect(trans.order))
       {
          Print("Master Event: ORDER_ADD (New Pending) for order #", trans.order);
@@ -707,3 +797,4 @@ void OnTimer(){
    if(EnableWebhookMode)     PollWebhook();
    if(EnableCopyTradeMode)   ProcessCopyTradeSlave();
 }
+
