@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MT5 Trading Bot Setup Script
-Automated setup and configuration wizard
+Automated setup and configuration wizard with Copy Trading support
 """
 
 import os
@@ -11,7 +11,6 @@ import shutil
 import json
 import secrets
 from pathlib import Path
-import winreg
 import logging
 
 class Colors:
@@ -149,9 +148,11 @@ class MT5TradingBotSetup:
         
         directories = [
             'app',
+            'app/copy_trading',         # ✅ Copy Trading modules
             'static', 
             'logs',
             'data',
+            'data/commands',            # ✅ Commands for EA
             'mt5_instances',
             'backup'
         ]
@@ -161,6 +162,12 @@ class MT5TradingBotSetup:
             if not dir_path.exists():
                 dir_path.mkdir(parents=True, exist_ok=True)
                 print_success(f"Created directory: {directory}")
+                
+                # ✅ สร้าง .gitkeep ในโฟลเดอร์ว่าง
+                if directory in ['data/commands', 'logs', 'backup']:
+                    gitkeep_file = dir_path / '.gitkeep'
+                    gitkeep_file.touch()
+                    
             else:
                 print_success(f"Directory exists: {directory}")
     
@@ -604,7 +611,16 @@ class MT5TradingBotSetup:
         print(f"   - Webhook URL: {webhook_url}")
         print()
         
-        print("4. For external access, setup Cloudflare Tunnel:")
+        # ✅ เพิ่มส่วน Copy Trading
+        print_colored("4. Copy Trading Setup:", Colors.YELLOW + Colors.BOLD)
+        print("   - Go to Copy Trading page in web interface")
+        print("   - Add Master and Slave accounts")
+        print("   - Create Copy Pair to get API Token")
+        print("   - Configure Master EA with the API Token")
+        print("   - Master EA will send signals to: /api/copy/trade")
+        print()
+        
+        print("5. For external access, setup Cloudflare Tunnel:")
         print("   - Install cloudflared")
         print("   - Run: cloudflared tunnel --url http://localhost:5000")
         print()
@@ -613,6 +629,12 @@ class MT5TradingBotSetup:
         print("✓ .env - Main configuration")
         print("✓ start.bat - Windows startup script")
         print("✓ start.py - Python startup script")
+        print()
+        
+        # ✅ เพิ่มส่วน Copy Trading folders
+        print_colored("Copy Trading folders created:", Colors.YELLOW)
+        print("✓ app/copy_trading/ - Copy Trading modules")
+        print("✓ data/commands/ - EA command storage")
         print()
         
         print_colored("Happy trading! 🚀", Colors.GREEN + Colors.BOLD)
