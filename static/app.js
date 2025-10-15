@@ -1732,20 +1732,7 @@ async loadData() {
             </div>
 
             <!-- API Token Section -->
-            <div class="pair-modal-section">
-              <h5 class="pair-modal-section-title" style="color: var(--success-color);">
-                <i class="fas fa-check-circle"></i>
-                API Token Generated
-              </h5>
-              <div class="form-group">
-                <div class="token-input-group">
-                  <input type="text" id="pairApiToken" class="form-input" readonly value="${this.generateApiToken()}" style="font-family: monospace;">
-                  <button class="btn btn-info btn-sm" onclick="ui.copyPairToken()" title="Copy Token">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-            </div>
+            
 
           </div>
           <div class="modal-footer">
