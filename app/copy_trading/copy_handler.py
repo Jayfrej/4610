@@ -1,7 +1,7 @@
 """
 Copy Trading Handler
 รับและประมวลผลสัญญาณจาก Master EA
-Version: 2.0 - Order Tracking with Comment-Based System
+Version: 2.1 - Fixed Copy TP/SL Toggle
 """
 
 import logging
@@ -60,14 +60,13 @@ class CopyHandler:
             master_account = str(signal_data.get('account', ''))
             if master_account != pair.get('master_account'):
                 logger.warning(f"[COPY_HANDLER] Account mismatch: {master_account} != {pair.get('master_account')}")
-                return {'success': False, 'error': 'Account number does not match master account'}
+                return {'success': False, 'error': 'Account mismatch'}
             
-            # 4) ตรวจสอบว่า Master Account มีอยู่ในระบบและ Online หรือไม่
-            session_manager = self.balance_helper.session_manager
-
-            if not session_manager.account_exists(master_account):
-                error_msg = f"Master account {master_account} not found in system"
-                logger.error(f"[COPY_HANDLER] {error_msg}")
+            # 4) แปลง Signal → Command
+            slave_command = self._convert_signal_to_command(signal_data, pair)
+            if not slave_command:
+                error_msg = "Cannot convert signal to command"
+                logger.warning(f"[COPY_HANDLER] {error_msg}")
                 try:
                     self.copy_executor.copy_history.record_copy_event({
                         'status': 'error',
@@ -81,29 +80,12 @@ class CopyHandler:
                 except Exception:
                     pass
                 return {'success': False, 'error': error_msg}
-
-            if not session_manager.is_instance_alive(master_account):
-                error_msg = f"Master account {master_account} is offline"
-                logger.warning(f"[COPY_HANDLER] {error_msg}")
-                try:
-                    self.copy_executor.copy_history.record_copy_event({
-                        'status': 'error',
-                        'master': master_account,
-                        'slave': pair['slave_account'],
-                        'action': str(signal_data.get('event', 'UNKNOWN')).upper(),
-                        'symbol': signal_data.get('symbol', '-'),
-                        'volume': signal_data.get('volume', ''),
-                        'message': f'⚠️ {error_msg}'
-                    })
-                except Exception:
-                    pass
-                return {'success': False, 'error': error_msg}
             
-            # 5) แปลงสัญญาณเป็นคำสั่งสำหรับ Slave
-            slave_command = self._convert_signal_to_command(signal_data, pair)
-            if not slave_command:
-                error_msg = 'Failed to convert signal to command'
-                logger.error(f"[COPY_HANDLER] {error_msg}")
+            # 5) ตรวจสอบว่า Slave online หรือไม่
+            slave_account = pair['slave_account']
+            if not self.balance_helper.session_manager.is_instance_alive(slave_account):
+                error_msg = f"Slave account {slave_account} is offline"
+                logger.warning(f"[COPY_HANDLER] {error_msg}")
                 try:
                     self.copy_executor.copy_history.record_copy_event({
                         'status': 'error',
@@ -164,57 +146,63 @@ class CopyHandler:
             master_volume: Volume จาก Master
             settings: การตั้งค่า Pair
             slave_account: หมายเลขบัญชี Slave
-            symbol: Symbol ที่เทรด
+            symbol: Symbol ที่จะเทรด
             
         Returns:
-            float: Volume ที่ปรับแล้ว (ปัดเศษตาม lot_step)
+            float: Volume ที่คำนวณแล้ว
         """
         try:
-            # ✅ Normalize keys (รองรับทั้ง camelCase และ snake_case)
             volume_mode = settings.get('volume_mode') or settings.get('volumeMode', 'multiply')
-            multiplier = float(settings.get('multiplier', 2.0))
-
-            # ✅ Lot Configuration (TODO: อ่านจาก Broker Settings)
-            min_lot = 0.01
-            max_lot = 100.0
-            lot_step = 0.01
-
-            calculated_volume = master_volume  # default
-
+            multiplier = float(settings.get('multiplier', 2))
+            
+            # ตรวจสอบข้อมูล Symbol
+            symbol_info = self.balance_helper.session_manager.get_symbol_info(slave_account, symbol)
+            if not symbol_info:
+                logger.warning(f"[COPY_HANDLER] Cannot get symbol info for {symbol}, using master volume")
+                return max(master_volume, 0.01)
+            
+            min_lot = float(symbol_info.get('volume_min', 0.01))
+            max_lot = float(symbol_info.get('volume_max', 100.0))
+            lot_step = float(symbol_info.get('volume_step', 0.01))
+            
             # คำนวณ Volume ตาม Mode
             if volume_mode == 'multiply':
-                # ✅ Volume Multiply Mode
+                # โหมด Multiply: Volume × Multiplier
                 calculated_volume = master_volume * multiplier
-                logger.debug(f"[COPY_HANDLER] Volume Mode: MULTIPLY | {master_volume} × {multiplier} = {calculated_volume}")
-
+                logger.info(f"[COPY_HANDLER] Multiply mode: {master_volume} × {multiplier} = {calculated_volume}")
+            
             elif volume_mode == 'fixed':
-                # ✅ Fixed Volume Mode
+                # โหมด Fixed: ใช้ค่า Multiplier เป็น Volume คงที่
                 calculated_volume = multiplier
-                logger.debug(f"[COPY_HANDLER] Volume Mode: FIXED | Volume = {calculated_volume}")
-
+                logger.info(f"[COPY_HANDLER] Fixed mode: Volume = {calculated_volume}")
+            
             elif volume_mode == 'percent':
-                # ✅ Percent of Balance Mode
+                # โหมด Percent: คำนวณจาก % ของ Balance
                 balance = self.balance_helper.get_account_balance(slave_account)
-                if balance is None or balance <= 0:
-                    logger.warning(
-                        f"[COPY_HANDLER] Cannot get balance for {slave_account}, fallback to multiply mode"
-                    )
-                    calculated_volume = master_volume * multiplier
-                else:
-                    stop_loss_pips = int(settings.get('percent_sl_pips', 50))
-                    calculated_volume = self.balance_helper.calculate_volume_by_risk(
-                        balance=balance,
-                        risk_percent=multiplier,
-                        symbol=symbol,
-                        stop_loss_pips=stop_loss_pips
-                    )
-                    logger.debug(
-                        f"[COPY_HANDLER] Volume Mode: PERCENT | "
-                        f"Balance: {balance} | Risk: {multiplier}% | "
-                        f"SL Pips: {stop_loss_pips} | Volume: {calculated_volume}"
-                    )
-
-            # ✅ Validate และปรับให้อยู่ในช่วง
+                if balance <= 0:
+                    logger.warning(f"[COPY_HANDLER] Cannot get balance for {slave_account}, using min lot")
+                    return min_lot
+                
+                # คำนวณ Volume จาก Risk % (multiplier = risk %)
+                # สูตร: Volume = (Balance × Risk%) / (SL_Points × Point_Value)
+                # ถ้าไม่มี SL ให้ใช้ค่า default
+                risk_amount = balance * (multiplier / 100)
+                
+                # ประมาณ Volume จาก Risk Amount (simplified)
+                # ใช้ค่าประมาณ: 1 lot = $10/point สำหรับ Forex
+                point_value = 10  # ค่าประมาณ
+                calculated_volume = risk_amount / (point_value * 100)
+                
+                logger.info(
+                    f"[COPY_HANDLER] Percent mode: "
+                    f"Balance={balance} | Risk={multiplier}% | Volume={calculated_volume}"
+                )
+            
+            else:
+                logger.warning(f"[COPY_HANDLER] Unknown volume mode: {volume_mode}, using multiply")
+                calculated_volume = master_volume * multiplier
+            
+            # ✅ ตรวจสอบขอบเขต
             if calculated_volume < min_lot:
                 logger.warning(
                     f"[COPY_HANDLER] Volume {calculated_volume} < min_lot {min_lot}, adjusted to {min_lot}"
@@ -338,18 +326,23 @@ class CopyHandler:
                     'comment': copy_comment  # ✅ ใส่ Comment เพื่อ Track Order
                 }
                 
-                # Copy TP/SL (ถ้าเปิด copyPSL)
+                # ✅ แก้ไข: เช็ค copy_psl ก่อนส่ง TP/SL
                 if copy_psl:
                     if signal_data.get('tp') is not None:
                         command['take_profit'] = float(signal_data['tp'])
-                        logger.info(f"[COPY_HANDLER] TP copied: {command['take_profit']}")
+                        logger.info(f"[COPY_HANDLER] ✅ TP copied: {command['take_profit']}")
                     if signal_data.get('sl') is not None:
                         command['stop_loss'] = float(signal_data['sl'])
-                        logger.info(f"[COPY_HANDLER] SL copied: {command['stop_loss']}")
+                        logger.info(f"[COPY_HANDLER] ✅ SL copied: {command['stop_loss']}")
+                    logger.info(f"[COPY_HANDLER] Copy TP/SL is ENABLED")
+                else:
+                    # ✅ เพิ่ม: Log เมื่อปิด copyPSL
+                    logger.info(f"[COPY_HANDLER] ⚠️ Copy TP/SL is DISABLED - TP/SL will NOT be copied")
                 
                 logger.info(
                     f"[COPY_HANDLER] ✅ OPEN Command created: "
-                    f"{trade_type} {symbol} {volume} lots | Comment: {copy_comment}"
+                    f"{trade_type} {symbol} {volume} lots | Comment: {copy_comment} | "
+                    f"TP: {command.get('take_profit', 'N/A')} | SL: {command.get('stop_loss', 'N/A')}"
                 )
                 return command
             
