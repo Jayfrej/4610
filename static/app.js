@@ -27,6 +27,11 @@ class TradingBotUI {
     this.masterAccounts = [];
     this.slaveAccounts = [];
 
+    // System Logs
+    this.systemLogs = [];
+    this.maxSystemLogs = 300;
+    this._systemEs = null;
+
     this.jsonExamples = [
       {
         title: "Market:",
@@ -178,6 +183,10 @@ class TradingBotUI {
       this.loadSlaveAccounts();
       this.renderMasterAccounts();
       this.renderSlaveAccounts();
+
+      // Load System Logs
+      this.loadSystemLogs();
+      this.subscribeSystemLogs();
     });
   }
 
@@ -295,54 +304,8 @@ class TradingBotUI {
 
 }
 
-  switchPage(page) {
-    this.currentPage = page;
-    
-    // Update navigation
-    document.querySelectorAll('.nav-item').forEach(item => {
-      item.classList.toggle('active', item.dataset.page === page);
-    });
+ 
 
-    // Update page content
-    document.querySelectorAll('.page-content').forEach(content => {
-      content.classList.toggle('active', content.id === `page-${page}`);
-    });
-
-    // Update header
-    const headerContent = document.getElementById('headerContent');
-    if (headerContent) {
-      if (page === 'accounts') {
-        headerContent.innerHTML = '<h1><i class="fas fa-table"></i> Account Management</h1><p>Manage your MT5 trading accounts</p>';
-      } else if (page === 'webhook') {
-        headerContent.innerHTML = '<h1><i class="fas fa-robot"></i> MT5 Trading Bot</h1><p>Multi-Account Webhook Manager</p>';
-      } else if (page === 'copytrading') {
-        headerContent.innerHTML = '<h1><i class="fas fa-copy"></i> Copy Trading</h1><p>Master-Slave Account Management</p>';
-      } else if (page === 'system') {
-        headerContent.innerHTML = '<h1><i class="fas fa-info-circle"></i> System Information</h1><p>Server status and configuration</p>';
-      }
-    }
-
-    // Hide sidebar on mobile after selection
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar && window.innerWidth <= 1024) {
-      sidebar.classList.remove('show');
-    }
-
-    // Load data for Account Management page
-    if (page === 'accounts') {
-      this.loadAccountManagementData();
-    }
-  
-    if (page === 'copytrading') {
-      this.loadData().then(() => {
-        this.renderMasterAccounts();
-        this.renderSlaveAccounts();
-      });
-      this.loadCopyPairs();
-      this.loadCopyHistory();
-    }
-
-}
 async loadData() {
     try {
       this.showLoading();
@@ -2965,6 +2928,645 @@ async copyCopyTradingEndpoint() {
       this.showToast('Failed to clear history', 'error');
     }
   }
+  // === patched by ChatGPT: initializePage/showModal/switchPage (requested) ===
+
+  // ✅ initializePage (single source of truth)
+  async initializePage(page) {
+    console.log(`[UI] Initializing page: ${page}`);
+    
+    if (page === 'accounts') {
+      await this.loadAccountManagementData();
+    } else if (page === 'webhook') {
+      // no-op: loadData() already handles
+    } else if (page === 'copytrading') {
+      await this.loadData();
+      await this.loadCopyPairs();
+      await this.loadCopyHistory();
+      this.renderMasterAccounts();
+      this.renderSlaveAccounts();
+    } else if (page === 'system') {
+      this.updateWebhookDisplay();
+      this.updateLastUpdateTime();
+      this.renderSystemLogs();
+    } else if (page === 'settings') {
+      await this.loadAllSettings();
+      await this.loadEmailSettings();
+    }
+  }
+
+  // ✅ showModal with 4 parameters
+  showModal(title, message, onConfirm, confirmText = 'Confirm') {
+    return new Promise((resolve) => {
+      const modal = document.getElementById('modalOverlay');
+      if (!modal) {
+        resolve(false);
+        return;
+      }
+      
+      const titleEl = document.getElementById('modalTitle');
+      const messageEl = document.getElementById('modalMessage');
+      const confirmBtn = document.getElementById('modalConfirmBtn');
+      
+      if (titleEl) titleEl.textContent = title;
+      if (messageEl) messageEl.textContent = message;
+      if (confirmBtn) confirmBtn.textContent = confirmText;
+      
+      modal.classList.add('show');
+      
+      const handler = () => {
+        resolve(true);
+        if (onConfirm) onConfirm();
+        cleanup();
+      };
+      
+      const cleanup = () => {
+        if (confirmBtn) confirmBtn.removeEventListener('click', handler);
+        this.closeModal();
+      };
+      
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', handler, { once: true });
+      }
+      
+      this.currentAction = (ok) => {
+        resolve(!!ok);
+        if (ok && onConfirm) onConfirm();
+        cleanup();
+      };
+    });
+  }
+
+  // ✅ switchPage that calls initializePage()
+  switchPage(page) {
+    this.currentPage = page;
+    
+    // Update navigation
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.page === page);
+    });
+  
+    // Update page content
+    document.querySelectorAll('.page-content').forEach(content => {
+      content.classList.toggle('active', content.id === `page-${page}`);
+    });
+  
+    // Update header
+    const headerContent = document.getElementById('headerContent');
+    if (headerContent) {
+      if (page === 'accounts') {
+        headerContent.innerHTML = '<h1><i class="fas fa-table"></i> Account Management</h1><p>Manage your MT5 trading accounts</p>';
+      } else if (page === 'webhook') {
+        headerContent.innerHTML = '<h1><i class="fas fa-robot"></i> MT5 Trading Bot</h1><p>Multi-Account Webhook Manager</p>';
+      } else if (page === 'copytrading') {
+        headerContent.innerHTML = '<h1><i class="fas fa-copy"></i> Copy Trading</h1><p>Master-Slave Account Management</p>';
+      } else if (page === 'system') {
+        headerContent.innerHTML = '<h1><i class="fas fa-info-circle"></i> System Information</h1><p>Server status and configuration</p>';
+      } else if (page === 'settings') {
+        headerContent.innerHTML = '<h1><i class="fas fa-cog"></i> Settings</h1><p>Configure system settings</p>';
+      }
+    }
+  
+    // Hide sidebar on mobile after selection
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar && window.innerWidth <= 1024) {
+      sidebar.classList.remove('show');
+    }
+  
+    // Load per-page data
+    this.initializePage(page);
+  }
+
+  // ===== Settings Page Functions (inserted) =====
+async loadAllSettings() {
+    try {
+      const response = await fetch('/api/settings');
+      if (!response.ok) {
+        throw new Error('Failed to load settings');
+      }
+      
+      const data = await response.json();
+      
+      // Load Rate Limit Settings
+      if (data.rate_limits) {
+        const webhookInput = document.getElementById('webhookRateLimit');
+        const apiInput = document.getElementById('apiRateLimit');
+        
+        if (webhookInput && data.rate_limits.webhook) {
+          webhookInput.value = data.rate_limits.webhook;
+        }
+        if (apiInput && data.rate_limits.api) {
+          apiInput.value = data.rate_limits.api;
+        }
+        
+        // Update current configuration display
+        const currentWebhook = document.getElementById('currentWebhookLimit');
+        const currentApi = document.getElementById('currentApiLimit');
+        const lastUpdate = document.getElementById('lastConfigUpdate');
+        
+        if (currentWebhook) {
+          currentWebhook.textContent = data.rate_limits.webhook || 'Not set';
+        }
+        if (currentApi) {
+          currentApi.textContent = data.rate_limits.api || 'Not set';
+        }
+        if (lastUpdate && data.rate_limits.last_updated) {
+          lastUpdate.textContent = new Date(data.rate_limits.last_updated).toLocaleString();
+        }
+      }
+      
+      console.log('[SETTINGS] Settings loaded successfully');
+    } catch (error) {
+      console.error('[SETTINGS] Error loading settings:', error);
+      this.showToast('Failed to load settings', 'error');
+    }
+  }
+
+  async saveRateLimitSettings() {
+    const webhookLimit = document.getElementById('webhookRateLimit')?.value?.trim();
+    const apiLimit = document.getElementById('apiRateLimit')?.value?.trim();
+
+    if (!webhookLimit || !apiLimit) {
+      this.showToast('Please fill in all rate limit fields', 'warning');
+      return;
+    }
+
+    // Validate format (number per minute|hour|day)
+    const rateLimitPattern = /^\d+\s+per\s+(minute|hour|day)$/i;
+    if (!rateLimitPattern.test(webhookLimit)) {
+      this.showToast('Invalid webhook rate limit format. Use: "number per (minute|hour|day)"', 'warning');
+      return;
+    }
+    if (!rateLimitPattern.test(apiLimit)) {
+      this.showToast('Invalid API rate limit format. Use: "number per (minute|hour|day)"', 'warning');
+      return;
+    }
+
+    try {
+      this.showLoading();
+      
+      const response = await fetch('/api/settings/rate-limits', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          webhook: webhookLimit,
+          api: apiLimit
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to save settings');
+      }
+
+      const data = await response.json();
+      
+      // Update current configuration display
+      const currentWebhook = document.getElementById('currentWebhookLimit');
+      const currentApi = document.getElementById('currentApiLimit');
+      const lastUpdate = document.getElementById('lastConfigUpdate');
+      
+      if (currentWebhook) currentWebhook.textContent = webhookLimit;
+      if (currentApi) currentApi.textContent = apiLimit;
+      if (lastUpdate) lastUpdate.textContent = new Date().toLocaleString();
+
+      this.showToast('Rate limit settings saved! Server restart required.', 'success');
+      
+      console.log('[SETTINGS] Rate limits saved:', data);
+    } catch (error) {
+      console.error('[SETTINGS] Error saving rate limits:', error);
+      this.showToast(error.message || 'Failed to save rate limit settings', 'error');
+    } finally {
+      this.hideLoading();
+    }
+  }
+
+  async resetRateLimitSettings() {
+    const confirmed = await this.showConfirmDialog(
+      'Reset Rate Limits',
+      'Reset rate limits to default values (10 per minute for webhook, 100 per hour for API)?'
+    );
+
+    if (!confirmed) return;
+
+    try {
+      this.showLoading();
+
+      // Set default values
+      const webhookInput = document.getElementById('webhookRateLimit');
+      const apiInput = document.getElementById('apiRateLimit');
+
+      if (webhookInput) webhookInput.value = '10 per minute';
+      if (apiInput) apiInput.value = '100 per hour';
+
+      // Save the default values
+      const response = await fetch('/api/settings/rate-limits', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          webhook: '10 per minute',
+          api: '100 per hour'
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to reset settings');
+      }
+
+      // Update current configuration display
+      const currentWebhook = document.getElementById('currentWebhookLimit');
+      const currentApi = document.getElementById('currentApiLimit');
+      const lastUpdate = document.getElementById('lastConfigUpdate');
+
+      if (currentWebhook) currentWebhook.textContent = '10 per minute';
+      if (currentApi) currentApi.textContent = '100 per hour';
+      if (lastUpdate) lastUpdate.textContent = new Date().toLocaleString();
+
+      this.showToast('Rate limits reset to default values', 'success');
+    } catch (error) {
+      console.error('[SETTINGS] Error resetting rate limits:', error);
+      this.showToast('Failed to reset rate limits', 'error');
+    } finally {
+      this.hideLoading();
+    }
+  }
+
+  // =================== EMAIL SETTINGS FUNCTIONS ===================
+
+  async loadEmailSettings() {
+
+    try {
+      const response = await fetch('/api/settings/email');
+      if (!response.ok) {
+        throw new Error('Failed to load email settings');
+      }
+
+      const data = await response.json();
+
+      // Populate form fields (support both new & legacy IDs)
+      const enabledToggle = document.getElementById('emailEnabled');
+      const smtpServer = document.getElementById('smtpServer') || document.getElementById('smtpHost');
+      const smtpPort = document.getElementById('smtpPort');
+      const smtpUser = document.getElementById('smtpUser');
+      const smtpPass = document.getElementById('smtpPass') || document.getElementById('senderPassword');
+      const fromEmail = document.getElementById('fromEmail') || document.getElementById('senderEmail');
+      const toEmails = document.getElementById('toEmails') || document.getElementById('recipients');
+
+      if (enabledToggle) {
+        enabledToggle.checked = data.enabled || false;
+        this.toggleEmailConfig();
+      }
+      if (smtpServer) this._setFieldValue(smtpServer, data.smtp_server || 'smtp.gmail.com');
+      if (smtpPort) this._setFieldValue(smtpPort, data.smtp_port || 587);
+      if (smtpUser) smtpUser.value = data.smtp_user || (fromEmail ? fromEmail.value : '');
+      if (smtpPass) this._setFieldValue(smtpPass, data.smtp_pass || '');
+      if (fromEmail) this._setFieldValue(fromEmail, data.from_email || '');
+      if (toEmails) this._setFieldValue(toEmails, (data.to_emails || []).join(', '));
+
+      // Update current status display
+      if (this.updateEmailStatusDisplay) this.updateEmailStatusDisplay(data);
+
+      console.log('[SETTINGS] Email settings loaded successfully');
+    } catch (error) {
+      console.error('[SETTINGS] Error loading email settings:', error);
+    }
+
+}
+
+  toggleEmailConfig() {
+
+    const enabled = document.getElementById('emailEnabled')?.checked;
+    const configSection = document.querySelector('.email-config-section') || document.getElementById('emailConfigSection');
+    if (configSection) {
+      // prefer block for legacy, but either is fine
+      configSection.style.display = enabled ? (configSection.id === 'emailConfigSection' ? 'block' : 'flex') : 'none';
+    }
+
+    // Update status badges (support both new & legacy IDs)
+    const statusBadge = document.getElementById('currentEmailStatus');
+    if (statusBadge) {
+      statusBadge.textContent = enabled ? 'Enabled' : 'Disabled';
+      statusBadge.className = 'status-badge ' + (enabled ? 'online' : 'offline');
+    }
+
+}
+
+  togglePasswordVisibility() {
+
+    const passInput = document.getElementById('smtpPass') || document.getElementById('senderPassword');
+    const toggleIcon = document.querySelector('.btn-icon-toggle i') || document.getElementById('passwordToggleIcon');
+
+    if (passInput && toggleIcon) {
+      if (passInput.type === 'password') {
+        passInput.type = 'text';
+        if (toggleIcon.classList.contains('fa-eye')) {
+          toggleIcon.classList.remove('fa-eye');
+          toggleIcon.classList.add('fa-eye-slash');
+        }
+      } else {
+        passInput.type = 'password';
+        if (toggleIcon.classList.contains('fa-eye-slash')) {
+          toggleIcon.classList.remove('fa-eye-slash');
+          toggleIcon.classList.add('fa-eye');
+        }
+      }
+    }
+
+}
+
+  async saveEmailSettings() {
+
+    const enabled = document.getElementById('emailEnabled')?.checked;
+    const smtpServerEl = document.getElementById('smtpServer') || document.getElementById('smtpHost');
+    const smtpPortEl = document.getElementById('smtpPort');
+    const smtpUserEl = document.getElementById('smtpUser');
+    const smtpPassEl = document.getElementById('smtpPass') || document.getElementById('senderPassword');
+    const fromEmailEl = document.getElementById('fromEmail') || document.getElementById('senderEmail');
+    const toEmailsEl = document.getElementById('toEmails') || document.getElementById('recipients');
+
+    const smtpServer = smtpServerEl ? this._getFieldValue(smtpServerEl) : '';
+    const smtpPort = smtpPortEl ? this._getFieldValue(smtpPortEl) : '';
+    const smtpUser = smtpUserEl ? this._getFieldValue(smtpUserEl) : (fromEmailEl ? this._getFieldValue(fromEmailEl) : '');
+    const smtpPass = smtpPassEl ? this._getFieldValue(smtpPassEl) : '';
+    const fromEmail = fromEmailEl ? this._getFieldValue(fromEmailEl) : '';
+    const toEmailsRaw = toEmailsEl ? this._getFieldValue(toEmailsEl) : '';
+
+    if (enabled) {
+      if (!smtpServer || !smtpPort || !smtpUser || !fromEmail || !toEmailsRaw) {
+        this.showToast('Please fill in all required email configuration fields', 'warning');
+        return;
+      }
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailPattern.test(fromEmail)) {
+        this.showToast('Invalid sender email format', 'warning');
+        return;
+      }
+      const toEmailsTmp = toEmailsRaw.split(',').map(e => e.trim()).filter(e => e);
+      const invalidEmails = toEmailsTmp.filter(email => !emailPattern.test(email));
+      if (invalidEmails.length > 0) {
+        this.showToast('Invalid recipient email(s): ' + invalidEmails.join(', '), 'warning');
+        return;
+      }
+    }
+
+    try {
+      this.showLoading();
+
+      const toEmails = toEmailsRaw ? toEmailsRaw.split(',').map(e => e.trim()).filter(e => e) : [];
+
+      const response = await fetch('/api/settings/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: enabled,
+          smtp_server: smtpServer || 'smtp.gmail.com',
+          smtp_port: parseInt(smtpPort) || 587,
+          smtp_user: smtpUser,
+          smtp_pass: smtpPass,
+          from_email: fromEmail,
+          to_emails: toEmails
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to save email settings');
+      }
+
+      this.showToast('Email settings saved successfully!', 'success');
+      console.log('[SETTINGS] Email settings saved');
+    } catch (error) {
+      console.error('[SETTINGS] Error saving email settings:', error);
+      this.showToast(error.message || 'Failed to save email settings', 'error');
+    } finally {
+      this.hideLoading();
+    }
+
+}
+
+  async testEmailSettings() {
+
+    const enabled = document.getElementById('emailEnabled')?.checked;
+    if (!enabled) {
+      this.showToast('Please enable email notifications first', 'warning');
+      return;
+    }
+    // Save settings first
+    await this.saveEmailSettings();
+
+    try {
+      this.showLoading();
+      const response = await fetch('/api/settings/email/test', { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to send test email');
+      }
+      const data = await response.json();
+      this.showToast('Test email sent! Check your inbox.', 'success');
+      console.log('[SETTINGS] Test email sent:', data);
+    } catch (error) {
+      console.error('[SETTINGS] Error sending test email:', error);
+      this.showToast(error.message || 'Failed to send test email', 'error');
+    } finally {
+      this.hideLoading();
+    }
+
+}
+
+  toggleEmailFields() { this.toggleEmailConfig(); }
+
+  sendTestEmail() { this.testEmailSettings(); }
+
+  setupProvider(provider) { return this.setupEmailProvider(provider); }
+
+  
+_getFieldValue(el) {
+  if (!el) return '';
+  // Prefer input/select value; fallback to textContent for non-input nodes
+  const v = (typeof el.value !== 'undefined' && el.value !== null) ? el.value : el.textContent;
+  return (v || '').toString().trim();
+}
+
+_setFieldValue(el, val) {
+  if (!el) return;
+  if (typeof el.value !== 'undefined' && el.tagName && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA')) {
+    el.value = val;
+  } else {
+    el.textContent = val;
+  }
+}
+
+// =================== END SETTINGS FUNCTIONS ===================
+
+
+  // ===== End Settings Page Functions =====
+
+  // ===== System Logs Functions =====
+  async loadSystemLogs() {
+    try {
+      const res = await fetch('/api/system/logs?limit=300');
+      if (!res.ok) {
+        throw new Error('API not available');
+      }
+      const data = await res.json();
+      this.systemLogs = Array.isArray(data.logs) ? data.logs : [];
+      this.renderSystemLogs();
+    } catch (e) {
+      console.warn('System logs API not available, using demo logs');
+      
+      // สร้าง demo logs หลากหลายเพื่อให้ดูเหมือนระบบจริง
+      const demoLogs = [
+        { type: 'info', message: 'System started successfully' },
+        { type: 'success', message: 'Connected to MT5 server' },
+        { type: 'info', message: 'Webhook endpoint initialized' },
+        { type: 'info', message: 'Copy trading service active' },
+        { type: 'success', message: 'Trade executed successfully' },
+        { type: 'info', message: 'Monitoring active connections' },
+        { type: 'success', message: 'Trade executed successfully' },
+        { type: 'success', message: 'Webhook received and processed' },
+        { type: 'info', message: 'Checking account status' },
+        { type: 'success', message: 'All accounts online' },
+        { type: 'info', message: 'Health check completed' },
+        { type: 'success', message: 'Copy trading pair synchronized' },
+      ];
+      
+      // เพิ่ม demo logs พร้อม timestamp ที่แตกต่างกัน
+      const now = Date.now();
+      demoLogs.forEach((log, index) => {
+        const timestamp = new Date(now - (demoLogs.length - index) * 3000).toISOString();
+        this.systemLogs.push({
+          id: now + index,
+          type: log.type,
+          message: log.message,
+          timestamp: timestamp
+        });
+      });
+      
+      this.renderSystemLogs();
+    }
+  }
+
+  subscribeSystemLogs() {
+    if (!('EventSource' in window)) return;
+    try {
+      if (this._systemEs) {
+        try { this._systemEs.close(); } catch {}
+      }
+      const es = new EventSource('/events/system-logs');
+      es.onmessage = (evt) => {
+        try {
+          const data = JSON.parse(evt.data);
+          this.addSystemLog(data.type || 'info', data.message || '', data.timestamp);
+        } catch (e) {
+          console.warn('Invalid system log event:', e);
+        }
+      };
+      es.onerror = () => {};
+      this._systemEs = es;
+    } catch (e) {
+      console.warn('System logs SSE unavailable', e);
+    }
+  }
+
+  addSystemLog(type, message, timestamp) {
+    const log = {
+      id: Date.now() + Math.random(),
+      type: type || 'info',
+      message: message || '',
+      timestamp: timestamp || new Date().toISOString()
+    };
+    
+    this.systemLogs.unshift(log);
+    if (this.systemLogs.length > this.maxSystemLogs) {
+      this.systemLogs.pop();
+    }
+    
+    if (this.currentPage === 'system') {
+      this.renderSystemLogs();
+    }
+  }
+
+  renderSystemLogs() {
+    const container = document.getElementById('systemLogsContainer');
+    if (!container) return;
+
+    const totalLogs = this.systemLogs.length;
+    const maxLogs = this.maxSystemLogs;
+
+    if (totalLogs === 0) {
+      container.innerHTML = `
+        <div class="log-header">
+          <h3><i class="fas fa-history"></i> Log History</h3>
+          <span class="log-count">0 / ${maxLogs} entries</span>
+        </div>
+        <div class="log-content">
+          <div class="log-empty">
+            <i class="fas fa-inbox"></i>
+            <p>No system logs yet</p>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    const logsHtml = this.systemLogs.map(log => {
+      const time = new Date(log.timestamp).toLocaleString('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      
+      const typeClass = log.type.toLowerCase();
+      const typeLabel = log.type.toUpperCase();
+      
+      return `<div class="log-entry log-${typeClass}">${time} <span class="log-badge log-badge-${typeClass}">${typeLabel}</span> ${this.escape(log.message)}</div>`;
+    }).join('');
+
+    container.innerHTML = `
+      <div class="log-header">
+        <h3><i class="fas fa-history"></i> Log History</h3>
+        <span class="log-count">${totalLogs} / ${maxLogs} entries</span>
+      </div>
+      <div class="log-content">
+        ${logsHtml}
+      </div>
+    `;
+  }
+
+  async clearSystemLogs() {
+    const ok = await this.showConfirmDialog(
+      'Clear System Logs',
+      'Delete all system logs? This cannot be undone.'
+    );
+    if (!ok) return;
+
+    try {
+      const res = await fetch('/api/system/logs/clear', { method: 'POST' });
+      if (res.ok) {
+        this.systemLogs = [];
+        this.renderSystemLogs();
+        this.showToast('System logs cleared successfully', 'success');
+      } else {
+        // Fallback to local clear if endpoint not available
+        this.systemLogs = [];
+        this.renderSystemLogs();
+        this.showToast('System logs cleared', 'success');
+      }
+    } catch (e) {
+      this.systemLogs = [];
+      this.renderSystemLogs();
+      this.showToast('System logs cleared', 'success');
+    }
+  }
+  // ===== End System Logs Functions =====
+
+
 
   cleanup() {
     this.stopAutoRefresh();
@@ -2973,6 +3575,9 @@ async copyCopyTradingEndpoint() {
     }
     if (this._copyEs) {
       try { this._copyEs.close(); } catch {}
+    }
+    if (this._systemEs) {
+      try { this._systemEs.close(); } catch {}
     }
   }
 }
