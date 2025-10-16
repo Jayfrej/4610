@@ -1,540 +1,775 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+
+<html data-theme="dark" lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>MT5 Trading Bot - Multi Account Manager</title>
-  <link rel="stylesheet" href="/static/style.css"/>
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet"/>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>MT5 Trading Bot - Multi Account Manager</title>
+<link href="/static/style.css" rel="stylesheet"/>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet"/>
 </head>
 <body>
-  <!-- Sidebar -->
-  <div class="sidebar" id="sidebar">
-    <div class="sidebar-header">
-      <i class="fas fa-robot"></i>
-      <span>MT5 Bot</span>
-    </div>
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item active" data-page="accounts">
-        <i class="fas fa-table"></i>
-        <span>Account Management</span>
-      </a>
-      <a href="#" class="nav-item" data-page="webhook">
-        <i class="fas fa-link"></i>
-        <span>Webhook</span>
-      </a>
-      <a href="#" class="nav-item" data-page="copytrading">
-        <i class="fas fa-copy"></i>
-        <span>Copy Trading</span>
-      </a>
-      <a href="#" class="nav-item" data-page="system">
-        <i class="fas fa-info-circle"></i>
-        <span>System Information</span>
-      </a>
-    </nav>
-    <div class="sidebar-footer">
-      <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Collapse Sidebar">
-        <i class="fas fa-bars"></i>
-      </button>
-    </div>
-  </div>
-
-  <!-- Toggle Sidebar Button (Mobile) -->
-  <button class="sidebar-toggle" id="sidebarToggle" title="Toggle Sidebar">
-    <i class="fas fa-bars"></i>
+<!-- Sidebar -->
+<div class="sidebar" id="sidebar">
+<div class="sidebar-header">
+<i class="fas fa-robot"></i>
+<span>MT5 Bot</span>
+</div>
+<nav class="sidebar-nav">
+<a class="nav-item active" data-page="accounts" href="#">
+<i class="fas fa-table"></i>
+<span>Account Management</span>
+</a>
+<a class="nav-item" data-page="webhook" href="#">
+<i class="fas fa-link"></i>
+<span>Webhook</span>
+</a>
+<a class="nav-item" data-page="copytrading" href="#">
+<i class="fas fa-copy"></i>
+<span>Copy Trading</span>
+</a>
+<a class="nav-item" data-page="system" href="#">
+<i class="fas fa-info-circle"></i>
+<span>System Information</span>
+</a>
+<a class="nav-item" data-page="settings" href="#">
+<i class="fas fa-cog"></i>
+<span>Settings</span>
+</a>
+</nav>
+<div class="sidebar-footer">
+<button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Collapse Sidebar">
+<i class="fas fa-bars"></i>
+</button>
+</div>
+</div>
+<!-- Toggle Sidebar Button (Mobile) -->
+<button class="sidebar-toggle" id="sidebarToggle" title="Toggle Sidebar">
+<i class="fas fa-bars"></i>
+</button>
+<div class="main-content">
+<div class="container">
+<!-- Header -->
+<header class="header" id="mainHeader">
+<div class="header-content" id="headerContent">
+<h1><i class="fas fa-table"></i> Account Management</h1>
+<p>Manage your MT5 trading accounts</p>
+</div>
+<div class="header-actions">
+<button class="btn btn-icon btn-secondary" id="themeToggleBtn">
+<i class="fas fa-sun"></i>
+</button>
+<button class="btn btn-secondary" id="refreshBtn">
+<i class="fas fa-sync-alt"></i> Refresh
   </button>
-
-  <div class="main-content">
-    <div class="container">
-      <!-- Header -->
-      <header class="header" id="mainHeader">
-        <div class="header-content" id="headerContent">
-          <h1><i class="fas fa-table"></i> Account Management</h1>
-          <p>Manage your MT5 trading accounts</p>
-        </div>
-        <div class="header-actions">
-  <button id="themeToggleBtn" class="btn btn-icon btn-secondary">
-    <i class="fas fa-sun"></i>
+<!-- ✅ ปุ่มสำหรับหน้า Copy Trading -->
+<button class="btn btn-primary" id="copyEndpointBtn" title="Copy Trading Endpoint">
+<i class="fas fa-copy"></i> Copy Endpoint
   </button>
-  <button id="refreshBtn" class="btn btn-secondary">
-    <i class="fas fa-sync-alt"></i> Refresh
-  </button>
-  
-  <!-- ✅ ปุ่มสำหรับหน้า Copy Trading -->
-  <button id="copyEndpointBtn" class="btn btn-primary" title="Copy Trading Endpoint">
-    <i class="fas fa-copy"></i> Copy Endpoint
-  </button>
-  
-  <!-- ปุ่มสำหรับหน้า Webhook -->
-  <button id="webhookBtn" class="btn btn-primary" title="Copy Webhook URL">
-    <i class="fas fa-link"></i> Copy Webhook
+<!-- ปุ่มสำหรับหน้า Webhook -->
+<button class="btn btn-primary" id="webhookBtn" title="Copy Webhook URL">
+<i class="fas fa-link"></i> Copy Webhook
   </button>
 </div>
-      </header>
-
-      <!-- Page: Account Management -->
-      <div id="page-accounts" class="page-content active">
-        <!-- Stats Grid -->
-        <div class="stats-grid stats-grid-4">
-          <div class="stat-card">
-            <div class="stat-icon"><i class="fas fa-users"></i></div>
-            <div class="stat-info">
-              <div class="stat-number" id="totalAccountsAM">0</div>
-              <div class="stat-label">Total Accounts</div>
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-icon online"></div>
-            <div class="stat-info">
-              <div class="stat-number" id="onlineAccountsAM">0</div>
-              <div class="stat-label">Online</div>
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-icon offline"></div>
-            <div class="stat-info">
-              <div class="stat-number" id="offlineAccountsAM">0</div>
-              <div class="stat-label">Offline</div>
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-icon"><i class="fas fa-clock"></i></div>
-            <div class="stat-info">
-              <div class="stat-number" id="lastUpdateAM">--:--:--</div>
-              <div class="stat-label">Last Update</div>
-            </div>
-          </div>
-        </div>
-
-                <!-- Add MT5 Account -->
-        <div class="card">
-          <div class="card-header">
-            <h3><i class="fas fa-plus"></i> Add MT5 Account</h3>
-          </div>
-          <div class="card-body">
-            <form id="addAccountFormAM" class="add-form-vertical">
-              <div class="form-group">
-                <label for="accountNumberAM">Account Number</label>
-                <input id="accountNumberAM" name="account" class="form-input" placeholder="e.g., 1123456" required />
-              </div>
-              <div class="form-group">
-                <label for="nicknameAM">Nickname</label>
-                <input id="nicknameAM" name="nickname" class="form-input" placeholder="e.g. Main Account" />
-              </div>
-              <button type="submit" class="btn btn-success btn-full">
-                <i class="fas fa-plus"></i> Add Account
+</header>
+<!-- Page: Account Management -->
+<div class="page-content active" id="page-accounts">
+<!-- Stats Grid -->
+<div class="stats-grid stats-grid-4">
+<div class="stat-card">
+<div class="stat-icon"><i class="fas fa-users"></i></div>
+<div class="stat-info">
+<div class="stat-number" id="totalAccountsAM">0</div>
+<div class="stat-label">Total Accounts</div>
+</div>
+</div>
+<div class="stat-card">
+<div class="stat-icon online"></div>
+<div class="stat-info">
+<div class="stat-number" id="onlineAccountsAM">0</div>
+<div class="stat-label">Online</div>
+</div>
+</div>
+<div class="stat-card">
+<div class="stat-icon offline"></div>
+<div class="stat-info">
+<div class="stat-number" id="offlineAccountsAM">0</div>
+<div class="stat-label">Offline</div>
+</div>
+</div>
+<div class="stat-card">
+<div class="stat-icon"><i class="fas fa-clock"></i></div>
+<div class="stat-info">
+<div class="stat-number" id="lastUpdateAM">--:--:--</div>
+<div class="stat-label">Last Update</div>
+</div>
+</div>
+</div>
+<!-- Add MT5 Account -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-plus"></i> Add MT5 Account</h3>
+</div>
+<div class="card-body">
+<form class="add-form-vertical" id="addAccountFormAM">
+<div class="form-group">
+<label for="accountNumberAM">Account Number</label>
+<input class="form-input" id="accountNumberAM" name="account" placeholder="e.g., 1123456" required=""/>
+</div>
+<div class="form-group">
+<label for="nicknameAM">Nickname</label>
+<input class="form-input" id="nicknameAM" name="nickname" placeholder="e.g. Main Account"/>
+</div>
+<button class="btn btn-success btn-full" type="submit">
+<i class="fas fa-plus"></i> Add Account
               </button>
-            </form>
-          </div>
-        </div>
-
-        
-
-        <!-- Account Management Table -->
-        <div class="card">
-          <div class="card-header">
-            <h3><i class="fas fa-table"></i> Account Management</h3>
-            <div class="table-actions">
-              <input id="searchInputAM" class="search-input" placeholder="Search accounts..."/>
-            </div>
-          </div>
-          <div class="card-body">
-            <div class="table-container">
-              <table class="accounts-table" id="accountsTableAM">
-                <thead>
-                  <tr>
-                    <th>Status</th>
-                    <th>Account</th>
-                    <th>Nickname</th>
-                    <th>PID</th>
-                    <th>Created</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="accountsTableBodyAM">
-                  <tr class="no-data"><td colspan="6">
-                    <div class="no-data-message">
-                      <i class="fas fa-inbox"></i>
-                      <p>No accounts found. Add your first account above.</p>
-                    </div>
-                  </td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Page: Webhook -->
-      <div id="page-webhook" class="page-content"><!-- Two Column -->
-        <div class="two-column-layout">
-          <div class="card">
-            <div class="card-header"><h3><i class="fas fa-plus"></i> Add MT5 Account</h3></div>
-            <div class="card-body">
-              <form id="addAccountForm" class="add-form-vertical">
-                <div class="form-group">
-                  <label for="accountNumber">Account Number</label>
-                  <input id="accountNumber" name="account" class="form-input" placeholder="e.g., 1123456" required />
-                </div>
-                <div class="form-group">
-                  <label for="nickname">Nickname</label>
-                  <input id="nickname" name="nickname" class="form-input" placeholder="e.g. Main Account" />
-                </div>
-                <div class="account-button-group">
-                  <button type="button" class="btn btn-success" onclick="ui.addAccountFromServer()">
-                    <i class="fas fa-server"></i> Add from Server
+</form>
+</div>
+</div>
+<!-- Account Management Table -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-table"></i> Account Management</h3>
+<div class="table-actions">
+<input class="search-input" id="searchInputAM" placeholder="Search accounts..."/>
+</div>
+</div>
+<div class="card-body">
+<div class="table-container">
+<table class="accounts-table" id="accountsTableAM">
+<thead>
+<tr>
+<th>Status</th>
+<th>Account</th>
+<th>Nickname</th>
+<th>PID</th>
+<th>Created</th>
+<th>Actions</th>
+</tr>
+</thead>
+<tbody id="accountsTableBodyAM">
+<tr class="no-data"><td colspan="6">
+<div class="no-data-message">
+<i class="fas fa-inbox"></i>
+<p>No accounts found. Add your first account above.</p>
+</div>
+</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<!-- Page: Webhook -->
+<div class="page-content" id="page-webhook"><!-- Two Column -->
+<div class="two-column-layout">
+<div class="card">
+<div class="card-header"><h3><i class="fas fa-plus"></i> Add MT5 Account</h3></div>
+<div class="card-body">
+<form class="add-form-vertical" id="addAccountForm">
+<div class="form-group">
+<label for="accountNumber">Account Number</label>
+<input class="form-input" id="accountNumber" name="account" placeholder="e.g., 1123456" required=""/>
+</div>
+<div class="form-group">
+<label for="nickname">Nickname</label>
+<input class="form-input" id="nickname" name="nickname" placeholder="e.g. Main Account"/>
+</div>
+<div class="account-button-group">
+<button class="btn btn-success" onclick="ui.addAccountFromServer()" type="button">
+<i class="fas fa-server"></i> Add from Server
                   </button>
-                  <button type="submit" class="btn btn-success">
-                    <i class="fas fa-plus"></i> Add Account
+<button class="btn btn-success" type="submit">
+<i class="fas fa-plus"></i> Add Account
                   </button>
-                </div>
-              </form>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header"><h3><i class="fas fa-link"></i> Webhook Configuration</h3></div>
-            <div class="card-body webhook-config">
-              <div class="form-group">
-                <label for="webhookUrl">Webhook URL</label>
-                <div class="url-input-group">
-                  <input id="webhookUrl" class="form-input" readonly placeholder="https://your-domain.com/webhook/your-secure-token"/>
-                  <button class="btn-copy" onclick="ui.copyWebhookUrl()" title="Copy to clipboard"><i class="fas fa-copy"></i></button>
-                </div>
-              </div>
-
-              <div class="webhook-info">
-                <div class="info-row"><strong>Usage:</strong> Use this URL in TradingView alerts or other webhook sources</div>
-                <div class="info-row"><strong>Method:</strong> POST</div>
-                <div class="info-row"><strong>Content-Type:</strong> application/json</div>
-              </div>
-
-              <div class="example-section">
-                <div class="example-header">
-                  <span>Example JSON Payload:</span>
-                  <div class="example-nav">
-                    <button class="example-nav-btn" onclick="showExample(0)">Market</button>
-                    <button class="example-nav-btn" onclick="showExample(1)">Market 2</button>
-                    <button class="example-nav-btn" onclick="showExample(2)">Limit</button>
-                    <button class="example-nav-btn" onclick="showExample(3)">Limit 2</button>
-                    <button class="example-nav-btn" onclick="showExample(4)">Close</button>
-                    <button class="example-nav-btn" onclick="showExample(5)">Close 2</button>
-                  </div>
-                </div>
-                <div class="example-content">
-                  <div class="example-title" id="exampleTitle">Market Order:</div>
-                  <div class="json-container">
-                    <button class="json-copy-btn" onclick="copyExample()" title="Copy JSON"><i class="fas fa-copy"></i></button>
-                    <pre id="jsonCode" class="json-code"></pre>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Webhook Management Table -->
-        <div class="card">
-          <div class="card-header">
-            <h3><i class="fas fa-table"></i> Webhook Management</h3>
-            <div class="table-actions"><input id="searchInput" class="search-input" placeholder="Search accounts..."/></div>
-          </div>
-          <div class="card-body">
-            <div class="table-container">
-              <table class="accounts-table" id="accountsTable">
-                <thead>
-                  <tr><th>Status</th><th>Account</th><th>Nickname</th><th>PID</th><th>Created</th><th>Actions</th></tr>
-                </thead>
-                <tbody id="accountsTableBody">
-                  <tr class="no-data"><td colspan="6">
-                    <div class="no-data-message"><i class="fas fa-inbox"></i><p>No webhook accounts. Use "Add from Server" to add.</p></div>
-                  </td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <!-- Trading History -->
-        <div class="card">
-          <div class="card-header">
-            <h3><i class="fas fa-history"></i> Trading History</h3>
-            <div class="table-actions">
-              <select id="historyFilter" class="form-input" style="width:auto;padding:8px 12px;">
-                <option value="all">All Trades</option>
-                <option value="success">Success Only</option>
-                <option value="error">Errors Only</option>
-              </select>
-              <select id="accountFilter" class="form-input" style="width:auto;padding:8px 12px;margin-left:8px;">
-                <option value="all">All Accounts</option>
-              </select>
-              <button class="btn btn-secondary btn-sm" onclick="ui.clearHistory()" title="Clear History">
-                <i class="fas fa-trash"></i> Clear
+</div>
+</form>
+</div>
+</div>
+<div class="card">
+<div class="card-header"><h3><i class="fas fa-link"></i> Webhook Configuration</h3></div>
+<div class="card-body webhook-config">
+<div class="form-group">
+<label for="webhookUrl">Webhook URL</label>
+<div class="url-input-group">
+<input class="form-input" id="webhookUrl" placeholder="https://your-domain.com/webhook/your-secure-token" readonly=""/>
+<button class="btn-copy" onclick="ui.copyWebhookUrl()" title="Copy to clipboard"><i class="fas fa-copy"></i></button>
+</div>
+</div>
+<div class="webhook-info">
+<div class="info-row"><strong>Usage:</strong> Use this URL in TradingView alerts or other webhook sources</div>
+<div class="info-row"><strong>Method:</strong> POST</div>
+<div class="info-row"><strong>Content-Type:</strong> application/json</div>
+</div>
+<div class="example-section">
+<div class="example-header">
+<span>Example JSON Payload:</span>
+<div class="example-nav">
+<button class="example-nav-btn" onclick="showExample(0)">Market</button>
+<button class="example-nav-btn" onclick="showExample(1)">Market 2</button>
+<button class="example-nav-btn" onclick="showExample(2)">Limit</button>
+<button class="example-nav-btn" onclick="showExample(3)">Limit 2</button>
+<button class="example-nav-btn" onclick="showExample(4)">Close</button>
+<button class="example-nav-btn" onclick="showExample(5)">Close 2</button>
+</div>
+</div>
+<div class="example-content">
+<div class="example-title" id="exampleTitle">Market Order:</div>
+<div class="json-container">
+<button class="json-copy-btn" onclick="copyExample()" title="Copy JSON"><i class="fas fa-copy"></i></button>
+<pre class="json-code" id="jsonCode"></pre>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Webhook Management Table -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-table"></i> Webhook Management</h3>
+<div class="table-actions"><input class="search-input" id="searchInput" placeholder="Search accounts..."/></div>
+</div>
+<div class="card-body">
+<div class="table-container">
+<table class="accounts-table" id="accountsTable">
+<thead>
+<tr><th>Status</th><th>Account</th><th>Nickname</th><th>PID</th><th>Created</th><th>Actions</th></tr>
+</thead>
+<tbody id="accountsTableBody">
+<tr class="no-data"><td colspan="6">
+<div class="no-data-message"><i class="fas fa-inbox"></i><p>No webhook accounts. Use "Add from Server" to add.</p></div>
+</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<!-- Trading History -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-history"></i> Trading History</h3>
+<div class="table-actions">
+<select class="form-input" id="historyFilter" style="width:auto;padding:8px 12px;">
+<option value="all">All Trades</option>
+<option value="success">Success Only</option>
+<option value="error">Errors Only</option>
+</select>
+<select class="form-input" id="accountFilter" style="width:auto;padding:8px 12px;margin-left:8px;">
+<option value="all">All Accounts</option>
+</select>
+<button class="btn btn-secondary btn-sm" onclick="ui.clearHistory()" title="Clear History">
+<i class="fas fa-trash"></i> Clear
               </button>
-            </div>
-          </div>
-          <div class="card-body">
-            <div class="table-container history-scroll">
-              <table class="accounts-table">
-                <thead>
-                  <tr><th>Status</th><th>Action</th><th>Symbol</th><th>Account</th><th>Volume</th><th>Price</th><th>Message</th><th>Time</th></tr>
-                </thead>
-                <tbody id="historyTableBody">
-                  <tr class="no-data"><td colspan="8">
-                    <div class="no-data-message"><i class="fas fa-clock-rotate-left"></i><p>No trading history yet.</p></div>
-                  </td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Page: Copy Trading -->
-      <div id="page-copytrading" class="page-content">
-        <!-- Two Column Layout -->
-        <div class="copy-trading-grid">
-          <div class="card">
-            <div class="card-header"><h3><i class="fas fa-plus"></i> Add Copy Trading Pair</h3></div>
-            <div class="card-body">
-              <form id="addCopyPairForm" class="copy-form-sections">
-                <div class="account-section">
-                  <h4 class="section-title">Master Account</h4>
-                  <div class="copy-account-row">
-                    <div class="form-group">
-                      <label for="masterAccountNumber">Account Number</label>
-                      <input id="masterAccountNumber" class="form-input" placeholder="e.g. 1123456" />
-                    </div>
-                    <div class="form-group">
-                      <label for="masterNickname">Nickname</label>
-                      <input id="masterNickname" class="form-input" placeholder="e.g. Main Account" />
-                    </div>
-                    <div class="copy-button-group">
-                      <button type="button" class="btn btn-success" onclick="ui.addMasterFromServer()">
-                        <i class="fas fa-server"></i> Add from server
+</div>
+</div>
+<div class="card-body">
+<div class="table-container history-scroll">
+<table class="accounts-table">
+<thead>
+<tr><th>Status</th><th>Action</th><th>Symbol</th><th>Account</th><th>Volume</th><th>Price</th><th>Message</th><th>Time</th></tr>
+</thead>
+<tbody id="historyTableBody">
+<tr class="no-data"><td colspan="8">
+<div class="no-data-message"><i class="fas fa-clock-rotate-left"></i><p>No trading history yet.</p></div>
+</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<!-- Page: Copy Trading -->
+<div class="page-content" id="page-copytrading">
+<!-- Two Column Layout -->
+<div class="copy-trading-grid">
+<div class="card">
+<div class="card-header"><h3><i class="fas fa-plus"></i> Add Copy Trading Pair</h3></div>
+<div class="card-body">
+<form class="copy-form-sections" id="addCopyPairForm">
+<div class="account-section">
+<h4 class="section-title">Master Account</h4>
+<div class="copy-account-row">
+<div class="form-group">
+<label for="masterAccountNumber">Account Number</label>
+<input class="form-input" id="masterAccountNumber" placeholder="e.g. 1123456"/>
+</div>
+<div class="form-group">
+<label for="masterNickname">Nickname</label>
+<input class="form-input" id="masterNickname" placeholder="e.g. Main Account"/>
+</div>
+<div class="copy-button-group">
+<button class="btn btn-success" onclick="ui.addMasterFromServer()" type="button">
+<i class="fas fa-server"></i> Add from server
                       </button>
-                      <button type="button" class="btn btn-success" onclick="ui.addMasterAccount()">
-                        <i class="fas fa-plus"></i> Add Account
+<button class="btn btn-success" onclick="ui.addMasterAccount()" type="button">
+<i class="fas fa-plus"></i> Add Account
                       </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="account-section">
-                  <h4 class="section-title">Slave Account</h4>
-                  <div class="copy-account-row">
-                    <div class="form-group">
-                      <label for="slaveAccountNumber">Account Number</label>
-                      <input id="slaveAccountNumber" class="form-input" placeholder="e.g. 1123456" />
-                    </div>
-                    <div class="form-group">
-                      <label for="slaveNickname">Nickname</label>
-                      <input id="slaveNickname" class="form-input" placeholder="e.g. Main Account" />
-                    </div>
-                    <div class="copy-button-group">
-                      <button type="button" class="btn btn-success" onclick="ui.addSlaveFromServer()">
-                        <i class="fas fa-server"></i> Add from server
+</div>
+</div>
+</div>
+<div class="account-section">
+<h4 class="section-title">Slave Account</h4>
+<div class="copy-account-row">
+<div class="form-group">
+<label for="slaveAccountNumber">Account Number</label>
+<input class="form-input" id="slaveAccountNumber" placeholder="e.g. 1123456"/>
+</div>
+<div class="form-group">
+<label for="slaveNickname">Nickname</label>
+<input class="form-input" id="slaveNickname" placeholder="e.g. Main Account"/>
+</div>
+<div class="copy-button-group">
+<button class="btn btn-success" onclick="ui.addSlaveFromServer()" type="button">
+<i class="fas fa-server"></i> Add from server
                       </button>
-                      <button type="button" class="btn btn-success" onclick="ui.addSlaveAccount()">
-                        <i class="fas fa-plus"></i> Add Account
+<button class="btn btn-success" onclick="ui.addSlaveAccount()" type="button">
+<i class="fas fa-plus"></i> Add Account
                       </button>
-                    </div>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <h3><i class="fas fa-layer-group"></i> Copy Trading Pairs</h3>
-            </div>
-            <div class="card-body">
-              <div class="plan-form-section">
-                <button type="button" class="btn btn-success btn-full" onclick="ui.addPlan()">
-                  <i class="fas fa-plus"></i> Create New Pair
+</div>
+</div>
+</div>
+</form>
+</div>
+</div>
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-layer-group"></i> Copy Trading Pairs</h3>
+</div>
+<div class="card-body">
+<div class="plan-form-section">
+<button class="btn btn-success btn-full" onclick="ui.addPlan()" type="button">
+<i class="fas fa-plus"></i> Create New Pair
                 </button>
-                <p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 12px; text-align: center;">
+<p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 12px; text-align: center;">
                   Create a copy trading pair between master and slave accounts
                 </p>
-              </div>
-
-              <div class="plans-list" id="plansList" style="margin-top: 20px;">
-                <div class="empty-state-small">
-                  <i class="fas fa-layer-group"></i>
-                  <p>No copy trading pairs yet</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Master/Slave Accounts -->
-        <div class="card">
-          <div class="card-header">
-            <h3><i class="fas fa-copy"></i> Copy Trading</h3>
-            <span class="badge" id="pairCount">0 accounts</span>
-          </div>
-          <div class="card-body">
-            <div class="pairs-two-column">
-              <div class="pairs-column">
-                <h4 class="pairs-column-title">
-                  <i class="fas fa-user"></i> Master Accounts
+</div>
+<div class="plans-list" id="plansList" style="margin-top: 20px;">
+<div class="empty-state-small">
+<i class="fas fa-layer-group"></i>
+<p>No copy trading pairs yet</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Master/Slave Accounts -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-copy"></i> Copy Trading</h3>
+<span class="badge" id="pairCount">0 accounts</span>
+</div>
+<div class="card-body">
+<div class="pairs-two-column">
+<div class="pairs-column">
+<h4 class="pairs-column-title">
+<i class="fas fa-user"></i> Master Accounts
                 </h4>
-                <div id="masterAccountsList" class="accounts-list">
-                  <div class="empty-state-small">
-                    <i class="fas fa-user"></i>
-                    <p>No master accounts</p>
-                  </div>
-                </div>
-              </div>
-
-              <div class="pairs-column">
-                <h4 class="pairs-column-title">
-                  <i class="fas fa-user"></i> Slave Accounts
+<div class="accounts-list" id="masterAccountsList">
+<div class="empty-state-small">
+<i class="fas fa-user"></i>
+<p>No master accounts</p>
+</div>
+</div>
+</div>
+<div class="pairs-column">
+<h4 class="pairs-column-title">
+<i class="fas fa-user"></i> Slave Accounts
                 </h4>
-                <div id="slaveAccountsList" class="accounts-list">
-                  <div class="empty-state-small">
-                    <i class="fas fa-user"></i>
-                    <p>No slave accounts</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Copy Trading History -->
-        <div class="card">
-          <div class="card-header">
-            <h3><i class="fas fa-history"></i> Copy Trading History</h3>
-            <div class="table-actions">
-              <select id="copyHistoryFilter" class="form-input" style="width:auto;padding:8px 12px;">
-                <option value="all">All</option>
-                <option value="success">Success</option>
-                <option value="error">Error</option>
-              </select>
-              <button class="btn btn-secondary btn-sm" onclick="ui.clearCopyHistory()">
-                <i class="fas fa-trash"></i> Clear
+<div class="accounts-list" id="slaveAccountsList">
+<div class="empty-state-small">
+<i class="fas fa-user"></i>
+<p>No slave accounts</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Copy Trading History -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-history"></i> Copy Trading History</h3>
+<div class="table-actions">
+<select class="form-input" id="copyHistoryFilter" style="width:auto;padding:8px 12px;">
+<option value="all">All</option>
+<option value="success">Success</option>
+<option value="error">Error</option>
+</select>
+<button class="btn btn-secondary btn-sm" onclick="ui.clearCopyHistory()">
+<i class="fas fa-trash"></i> Clear
               </button>
-            </div>
-          </div>
-          <div class="card-body">
-            <div class="table-container history-scroll">
-              <table class="accounts-table">
-                <thead>
-                  <tr><th>Status</th><th>Master</th><th>Slave</th><th>Action</th><th>Symbol</th><th>Volume</th><th>Time</th></tr>
-                </thead>
-                <tbody id="copyHistoryTableBody">
-                  <tr class="no-data"><td colspan="7">
-                    <div class="no-data-message"><i class="fas fa-clock-rotate-left"></i><p>No Copy Trading history yet.</p></div>
-                  </td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <!-- Active Pairs Table -->
-        <div class="card">
-          <div class="card-header">
-            <h3><i class="fas fa-link"></i> Active Copy Trading Pairs</h3>
-            <span class="badge" id="activePairsCount">0 active pairs</span>
-          </div>
-          <div class="card-body">
-            <div class="table-container">
-              <table class="accounts-table">
-                <thead>
-                  <tr>
-                    <th>Pair</th>
-                    <th>Auto Map Symbol</th>
-                    <th>Auto Map Volume</th>
-                    <th>Copy TP/SL</th>
-                    <th>Volume Mode</th>
-                    <th>API Token</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="activePairsTableBody">
-                  <tr class="no-data"><td colspan="7">
-                    <div class="no-data-message">
-                      <i class="fas fa-link"></i>
-                      <p>No active copy trading pairs</p>
-                    </div>
-                  </td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Page: System Information -->
-      <div id="page-system" class="page-content">
-        <div class="card">
-          <div class="card-header">
-            <h3><i class="fas fa-info-circle"></i> System Information</h3>
-          </div>
-          <div class="card-body">
-            <div class="system-info">
-              <div class="info-item">
-                <strong>Server Status:</strong>
-                <span class="status-badge online" id="serverStatusSystem">Online</span>
-              </div>
-              <div class="info-item">
-                <strong>Webhook Endpoint:</strong>
-                <code id="webhookEndpointSystem">Loading...</code>
+</div>
+</div>
+<div class="card-body">
+<div class="table-container history-scroll">
+<table class="accounts-table">
+<thead>
+<tr><th>Status</th><th>Master</th><th>Slave</th><th>Action</th><th>Symbol</th><th>Volume</th><th>Time</th></tr>
+</thead>
+<tbody id="copyHistoryTableBody">
+<tr class="no-data"><td colspan="7">
+<div class="no-data-message"><i class="fas fa-clock-rotate-left"></i><p>No Copy Trading history yet.</p></div>
+</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<!-- Active Pairs Table -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-link"></i> Active Copy Trading Pairs</h3>
+<span class="badge" id="activePairsCount">0 active pairs</span>
+</div>
+<div class="card-body">
+<div class="table-container">
+<table class="accounts-table">
+<thead>
+<tr>
+<th>Pair</th>
+<th>Auto Map Symbol</th>
+<th>Auto Map Volume</th>
+<th>Copy TP/SL</th>
+<th>Volume Mode</th>
+<th>API Token</th>
+<th>Actions</th>
+</tr>
+</thead>
+<tbody id="activePairsTableBody">
+<tr class="no-data"><td colspan="7">
+<div class="no-data-message">
+<i class="fas fa-link"></i>
+<p>No active copy trading pairs</p>
+</div>
+</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<!-- Page: System Information -->
+<div class="page-content" id="page-system">
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-info-circle"></i> System Information</h3>
+</div>
+<div class="card-body">
+<div class="system-info">
 <div class="info-item">
-  <strong>Copy Trading Endpoint:</strong>
-  <code id="copyTradingEndpointSystem">Loading...</code>
-  <button class="btn-copy" onclick="ui.copyCopyTradingEndpoint()">
-    <i class="fas fa-copy"></i>
-  </button>
+<strong>Server Status:</strong>
+<span class="status-badge online" id="serverStatusSystem">Online</span>
+</div>
+<div class="info-item">
+<strong>Webhook Endpoint:</strong>
+<code id="webhookEndpointSystem">Loading...</code>
+<button class="btn-copy" onclick="ui.copyWebhookUrl()">
+<i class="fas fa-copy"></i>
+</button>
+</div>
+<div class="info-item">
+<strong>Copy Trading Endpoint:</strong>
+<code id="copyTradingEndpointSystem">Loading...</code>
+<button class="btn-copy" onclick="ui.copyCopyTradingEndpoint()">
+<i class="fas fa-copy"></i>
+</button>
+</div>
+<div class="info-item">
+<strong>Last Health Check:</strong>
+<span id="lastHealthCheckSystem">--:--:--</span>
+</div>
+</div>
+</div>
 </div>
 
-                <button class="btn-copy" onclick="ui.copyWebhookUrl()">
-                  <i class="fas fa-copy"></i>
-                </button>
+<!-- System Logs Card -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-history"></i> System Logs</h3>
+<button class="btn btn-danger btn-sm" onclick="ui.clearSystemLogs()" title="Clear Logs">
+<i class="fas fa-trash"></i> Clear Logs
+</button>
+</div>
+<div class="card-body">
+<div id="systemLogsContainer">
+<div class="log-header">
+<h3><i class="fas fa-history"></i> Log History</h3>
+<span class="log-count">Loading...</span>
+</div>
+<div class="log-content">
+<div class="log-empty">
+<i class="fas fa-spinner fa-spin"></i>
+<p>Loading system logs...</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+<!-- Page: Settings -->
+<div class="page-content" id="page-settings">
+<!-- Rate Limit Settings Card -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-tachometer-alt"></i> Rate Limit Settings</h3>
+</div>
+<div class="card-body">
+<div class="settings-info-box">
+<i class="fas fa-info-circle"></i>
+<div>
+<strong>Rate Limiting</strong> helps protect your server from abuse by limiting the number of requests.
+                <br/>Changes require server restart to take effect.
               </div>
-              <div class="info-item">
-                <strong>Last Health Check:</strong>
-                <span id="lastHealthCheckSystem">--:--:--</span>
+</div>
+<!-- Rate Limit 2-Column Grid -->
+<div class="rate-limit-grid">
+<!-- Webhook Rate Limit (Left Column) -->
+<div class="settings-section">
+<div class="section-title">
+<i class="fas fa-link"></i> Webhook Rate Limit
+                </div>
+<div class="form-group">
+<label for="webhookRateLimit">Webhook Rate Limit</label>
+<input class="form-input" id="webhookRateLimit" placeholder="10 per minute" type="text"/>
+<small class="form-hint">
+                    Format: <code>number per (minute|hour|day)</code>
+</small>
+</div>
+<div class="rate-limit-examples">
+<strong>Examples:</strong>
+<button class="btn-example" onclick="document.getElementById('webhookRateLimit').value='10 per minute'">
+                    10 per minute
+                  </button>
+<button class="btn-example" onclick="document.getElementById('webhookRateLimit').value='100 per hour'">
+                    100 per hour
+                  </button>
+<button class="btn-example" onclick="document.getElementById('webhookRateLimit').value='1000 per day'">
+                    1000 per day
+                  </button>
+</div>
+</div>
+<!-- API Rate Limit (Right Column) -->
+<div class="settings-section">
+<div class="section-title">
+<i class="fas fa-server"></i> API Rate Limit
+                </div>
+<div class="form-group">
+<label for="apiRateLimit">API Rate Limit</label>
+<input class="form-input" id="apiRateLimit" placeholder="100 per hour" type="text"/>
+<small class="form-hint">
+                    Format: <code>number per (minute|hour|day)</code>
+</small>
+</div>
+<div class="rate-limit-examples">
+<strong>Examples:</strong>
+<button class="btn-example" onclick="document.getElementById('apiRateLimit').value='100 per minute'">
+                    100 per minute
+                  </button>
+<button class="btn-example" onclick="document.getElementById('apiRateLimit').value='1000 per hour'">
+                    1000 per hour
+                  </button>
+<button class="btn-example" onclick="document.getElementById('apiRateLimit').value='10000 per day'">
+                    10000 per day
+                  </button>
+</div>
+</div>
+</div>
+<!-- Current Configuration -->
+<div class="settings-sections">
+<div class="settings-section">
+<div class="section-title">
+<i class="fas fa-info-circle"></i> Current Configuration
+                </div>
+<div class="current-config">
+<div class="config-item">
+<strong>Webhook Rate Limit:</strong>
+<code id="currentWebhookLimit">Not set</code>
+</div>
+<div class="config-item">
+<strong>API Rate Limit:</strong>
+<code id="currentApiLimit">Not set</code>
+</div>
+<div class="config-item">
+<strong>Last Updated:</strong>
+<span id="lastConfigUpdate">Never</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Action Buttons -->
+<div class="settings-actions">
+  <button class="btn btn-secondary" onclick="ui.resetRateLimitSettings()">
+    <i class="fas fa-undo"></i> Reset to Default
+  </button>
+  <button class="btn btn-primary" onclick="ui.saveRateLimitSettings()">
+    <i class="fas fa-save"></i> Save Changes
+  </button>
+</div>
+</div>
+</div>
+<!-- Email Settings Card -->
+<div class="card">
+<div class="card-header">
+<h3><i class="fas fa-envelope"></i> Email Notification Settings</h3>
+</div>
+<div class="card-body">
+<div class="settings-info-box">
+<i class="fas fa-info-circle"></i>
+<div>
+<strong>Email Notifications</strong> will alert you about system errors, trading events, and important updates.
+                <br/>Supports Gmail, Outlook, Yahoo, and other SMTP providers.
               </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Overlays -->
-  <div id="loadingOverlay" class="loading-overlay">
-    <div class="loading-spinner">
-      <i class="fas fa-spinner fa-spin"></i>
-      <p>Processing...</p>
-    </div>
-  </div>
-  <div id="toastContainer" class="toast-container"></div>
-
-  <!-- Modal -->
-  <div id="modalOverlay" class="modal-overlay">
-    <div class="modal">
-      <div class="modal-header">
-        <h4 id="modalTitle">Confirm Action</h4>
-        <button class="modal-close" onclick="ui.closeModal()">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-      <div class="modal-body">
-        <p id="modalMessage">Are you sure?</p>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="ui.closeModal()">Cancel</button>
-        <button id="modalConfirmBtn" class="btn btn-danger" onclick="ui.confirmAction()">Confirm</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="/static/app.js"></script>
+</div>
+<div class="settings-sections">
+<!-- Enable/Disable Email -->
+<div class="settings-section">
+<div class="section-title">
+<i class="fas fa-toggle-on"></i> Email Status
+                </div>
+<div class="email-toggle-group">
+<label class="toggle-switch">
+<input id="emailEnabled" onchange="ui.toggleEmailFields()" type="checkbox"/>
+<span class="toggle-slider"></span>
+</label>
+<label class="toggle-label" for="emailEnabled">Enable Email Notifications</label>
+</div>
+</div>
+<!-- Email Configuration -->
+<div class="email-config-section" id="emailConfigSection" style="display: none;">
+<!-- Grid 2 คอลัมน์สำหรับ Sender และ Recipients -->
+<div class="email-config-grid">
+<!-- Sender Configuration (ซ้าย) -->
+<div class="settings-section">
+<div class="section-title">
+<i class="fas fa-paper-plane"></i> Sender Email
+                    </div>
+<div class="form-group">
+<label for="senderEmail">Sender Email *</label>
+<input class="form-input" id="senderEmail" placeholder="your.email@gmail.com" type="email"/>
+<small class="form-hint">
+                        Email address that will send notifications
+                      </small>
+</div>
+<div class="form-group">
+<label for="senderPassword">Email Password / App Password *</label>
+<div class="password-input-group">
+<input class="form-input" id="senderPassword" placeholder="Enter your email password or app password" type="password"/>
+<button class="btn-icon-toggle" onclick="ui.toggleEmailPassword()" title="Show/Hide Password">
+<i class="fas fa-eye" id="passwordToggleIcon"></i>
+</button>
+</div>
+<small class="form-hint">
+<i class="fas fa-exclamation-triangle"></i> For Gmail: Use App Password, not your regular password
+                      </small>
+</div>
+<!-- Provider Quick Setup -->
+</div>
+<!-- Recipients Configuration (ขวา) -->
+<div class="settings-section">
+<div class="section-title">
+<i class="fas fa-users"></i> Recipients
+                    </div>
+<div class="form-group">
+<label for="recipients">Recipient Emails *</label>
+<input class="form-input" id="recipients" placeholder="email1@gmail.com, email2@gmail.com" type="text"/>
+<small class="form-hint">
+                        Enter one or more email addresses (separated by commas)
+                      </small>
+</div>
+<div class="form-hint" style="margin-top: 12px;">
+<i class="fas fa-info-circle"></i> Multiple recipients will all receive notification emails
+                    </div>
+</div>
+</div>
+<!-- Advanced SMTP Settings (Full Width) -->
+<div class="settings-section" style="margin-top: 20px;">
+<div class="section-title">
+<i class="fas fa-server"></i> SMTP Settings (Auto-detected)
+                  </div>
+<div class="smtp-info-grid">
+<div class="smtp-info-item">
+<strong>SMTP Server:</strong>
+<code id="smtpServer">smtp.gmail.com</code>
+</div>
+<div class="smtp-info-item">
+<strong>SMTP Port:</strong>
+<code id="smtpPort">587</code>
+</div>
+<div class="smtp-info-item">
+<strong>Encryption:</strong>
+<code>TLS/STARTTLS</code>
+</div>
+</div>
+</div>
+<!-- Test Email (Full Width) -->
+</div>
+<!-- Current Email Status -->
+<div class="settings-section">
+<div class="section-title">
+<i class="fas fa-info-circle"></i> Current Status
+                </div>
+<div class="current-config">
+<div class="config-item">
+<strong>Email Notifications:</strong>
+<span class="status-badge offline" id="currentEmailStatus">Disabled</span>
+</div>
+<div class="config-item">
+<strong>Configured Sender:</strong>
+<code id="currentSenderEmail">Not configured</code>
+</div>
+<div class="config-item">
+<strong>Recipients Count:</strong>
+<span id="currentRecipientsCount">0</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Action Buttons -->
+<div class="settings-actions">
+  <button class="btn btn-secondary" onclick="ui.resetEmailSettings()">
+    <i class="fas fa-undo"></i> Reset
+  </button>
+  <button class="btn btn-info" id="testEmailBtn" onclick="ui.sendTestEmail()">
+    <i class="fas fa-paper-plane"></i> Test Email
+  </button>
+  <button class="btn btn-primary" onclick="ui.saveEmailSettings()">
+    <i class="fas fa-save"></i> Save Changes
+  </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Overlays -->
+<div class="loading-overlay" id="loadingOverlay">
+<div class="loading-spinner">
+<i class="fas fa-spinner fa-spin"></i>
+<p>Processing...</p>
+</div>
+</div>
+<div class="toast-container" id="toastContainer"></div>
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay">
+<div class="modal">
+<div class="modal-header">
+<h4 id="modalTitle">Confirm Action</h4>
+<button class="modal-close" onclick="ui.closeModal()">
+<i class="fas fa-times"></i>
+</button>
+</div>
+<div class="modal-body">
+<p id="modalMessage">Are you sure?</p>
+</div>
+<div class="modal-footer">
+<button class="btn btn-secondary" onclick="ui.closeModal()">Cancel</button>
+<button class="btn btn-danger" id="modalConfirmBtn" onclick="ui.confirmAction()">Confirm</button>
+</div>
+</div>
+</div>
+<script src="/static/app.js"></script>
 </body>
 </html>
