@@ -1,665 +1,555 @@
-#!/usr/bin/env python3
-"""
-MT5 Trading Bot Setup Script
-Automated setup and configuration wizard with Copy Trading support
-"""
-
-import os
-import sys
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
 import subprocess
-import shutil
-import json
-import secrets
+import sys
+import os
+import threading
 from pathlib import Path
-import logging
 
-class Colors:
-    """ANSI color codes for terminal output"""
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    MAGENTA = '\033[95m'
-    CYAN = '\033[96m'
-    WHITE = '\033[97m'
-    BOLD = '\033[1m'
-    ENDC = '\033[0m'
-
-def print_colored(message, color=Colors.WHITE):
-    """Print colored message"""
-    print(f"{color}{message}{Colors.ENDC}")
-
-def print_header(title):
-    """Print section header"""
-    print("\n" + "="*60)
-    print_colored(f"{title.center(60)}", Colors.CYAN + Colors.BOLD)
-    print("="*60)
-
-def print_step(step_num, total_steps, description):
-    """Print step information"""
-    print_colored(f"\n[{step_num}/{total_steps}] {description}", Colors.YELLOW + Colors.BOLD)
-
-def print_success(message):
-    """Print success message"""
-    print_colored(f"✓ {message}", Colors.GREEN)
-
-def print_warning(message):
-    """Print warning message"""
-    print_colored(f"⚠ {message}", Colors.YELLOW)
-
-def print_error(message):
-    """Print error message"""
-    print_colored(f"✗ {message}", Colors.RED)
-
-class MT5TradingBotSetup:
-    """Setup wizard for MT5 Trading Bot"""
-    
-    def __init__(self):
+class SetupWizard:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("TradingView to MT5 - Setup Wizard")
+        self.root.geometry("700x600")
+        self.root.resizable(True, True)
+        
         self.base_dir = Path.cwd()
-        self.config = {}
-        self.mt5_path = None
-        self.profile_source = None
         
-    def run_setup(self):
-        """Run complete setup process"""
-        try:
-            print_header("MT5 Trading Bot Setup Wizard")
-            print_colored("Welcome to the MT5 Trading Bot setup wizard!", Colors.CYAN)
-            print_colored("This will guide you through the installation process.", Colors.WHITE)
-            
-            steps = [
-                "Check System Requirements",
-                "Create Directory Structure", 
-                "Install Python Dependencies",
-                "Find MT5 Installation",
-                "Configure MT5 Profile Source",
-                "Generate Security Configuration",
-                "Create Configuration Files",
-                "Test Configuration",
-                "Setup Complete"
-            ]
-            
-            total_steps = len(steps)
-            
-            for i, step in enumerate(steps, 1):
-                print_step(i, total_steps, step)
-                
-                if i == 1:
-                    self.check_system_requirements()
-                elif i == 2:
-                    self.create_directory_structure()
-                elif i == 3:
-                    self.install_dependencies()
-                elif i == 4:
-                    self.find_mt5_installation()
-                elif i == 5:
-                    self.configure_profile_source()
-                elif i == 6:
-                    self.generate_security_config()
-                elif i == 7:
-                    self.create_config_files()
-                elif i == 8:
-                    self.test_configuration()
-                elif i == 9:
-                    self.setup_complete()
-            
-        except KeyboardInterrupt:
-            print_error("\nSetup cancelled by user.")
-            sys.exit(1)
-        except Exception as e:
-            print_error(f"Setup failed: {str(e)}")
-            sys.exit(1)
-    
-    def check_system_requirements(self):
-        """Check system requirements"""
-        print("Checking system requirements...")
+        # Configure dark theme colors
+        self.bg_dark = "#1e1e1e"
+        self.bg_secondary = "#2d2d2d"
+        self.bg_input = "#3c3c3c"
+        self.fg_primary = "#ffffff"
+        self.fg_secondary = "#b0b0b0"
+        self.accent_blue = "#0078d4"
+        self.accent_green = "#107c10"
+        self.accent_red = "#d13438"
+        self.accent_yellow = "#ffa500"
         
-        # Check Python version
-        if sys.version_info < (3, 8):
-            print_error("Python 3.8+ is required")
-            sys.exit(1)
-        else:
-            print_success(f"Python {sys.version.split()[0]} ✓")
+        # Apply dark theme
+        self.setup_dark_theme()
         
-        # Check if Windows
-        if os.name != 'nt':
-            print_warning("This bot is designed for Windows. Some features may not work on other OS.")
-        else:
-            print_success("Windows OS ✓")
+        # Variables
+        self.basic_user = tk.StringVar(value="admin")
+        self.basic_password = tk.StringVar()
+        self.external_base_url = tk.StringVar(value="http://localhost:5000")
+        self.mt5_main_path = tk.StringVar()
+        self.mt5_instances_dir = tk.StringVar()
         
-        # Check required packages
-        required_packages = ['flask', 'psutil', 'requests', 'python-dotenv']
-        missing_packages = []
+        # Auto-set instances directory
+        self.mt5_instances_dir.set(str(self.base_dir / 'mt5_instances'))
         
-        for package in required_packages:
-            try:
-                __import__(package)
-                print_success(f"{package} ✓")
-            except ImportError:
-                missing_packages.append(package)
-                print_warning(f"{package} - will be installed")
+        self.setup_ui()
         
-        if missing_packages:
-            print_colored(f"Will install missing packages: {', '.join(missing_packages)}", Colors.YELLOW)
-    
-    def create_directory_structure(self):
+    def setup_dark_theme(self):
+        """Setup dark theme for the application"""
+        self.root.configure(bg=self.bg_dark)
+        
+        # Configure ttk styles
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Configure colors
+        style.configure(".", 
+                       background=self.bg_dark,
+                       foreground=self.fg_primary,
+                       fieldbackground=self.bg_input,
+                       bordercolor=self.bg_secondary,
+                       selectbackground=self.accent_blue,
+                       selectforeground=self.fg_primary)
+        
+        style.configure("TFrame", background=self.bg_dark)
+        style.configure("TLabel", background=self.bg_dark, foreground=self.fg_primary)
+        style.configure("TLabelframe", background=self.bg_dark, foreground=self.fg_primary)
+        style.configure("TLabelframe.Label", background=self.bg_dark, foreground=self.fg_primary)
+        
+        style.configure("TButton",
+                       background=self.accent_blue,
+                       foreground=self.fg_primary,
+                       borderwidth=0,
+                       focuscolor='none',
+                       padding=10)
+        style.map("TButton",
+                 background=[('active', '#106ebe'), ('disabled', self.bg_secondary)],
+                 foreground=[('disabled', self.fg_secondary)])
+        
+        style.configure("TEntry",
+                       fieldbackground=self.bg_input,
+                       foreground=self.fg_primary,
+                       bordercolor=self.bg_secondary,
+                       insertcolor=self.fg_primary)
+        
+        style.configure("TProgressbar",
+                       background=self.accent_blue,
+                       troughcolor=self.bg_secondary,
+                       bordercolor=self.bg_secondary,
+                       lightcolor=self.accent_blue,
+                       darkcolor=self.accent_blue)
+        
+    def setup_ui(self):
+        # Main container with scrollbar
+        main_container = ttk.Frame(self.root)
+        main_container.pack(fill=tk.BOTH, expand=True)
+        
+        canvas = tk.Canvas(main_container, bg=self.bg_dark, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=680)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Mouse wheel scrolling
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        
+        # Content padding
+        content = ttk.Frame(scrollable_frame, padding="20")
+        content.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        title_label = tk.Label(
+            content, 
+            text="🚀 TradingView to MT5 Setup Wizard",
+            font=("Segoe UI", 18, "bold"),
+            bg=self.bg_dark,
+            fg=self.fg_primary
+        )
+        title_label.pack(pady=(0, 5))
+        
+        subtitle = tk.Label(
+            content,
+            text="Configure your automated trading bridge",
+            font=("Segoe UI", 10),
+            bg=self.bg_dark,
+            fg=self.fg_secondary
+        )
+        subtitle.pack(pady=(0, 20))
+        
+        # Status label
+        self.status_label = tk.Label(
+            content,
+            text="● Ready to setup",
+            font=("Segoe UI", 10),
+            bg=self.bg_dark,
+            fg=self.accent_yellow
+        )
+        self.status_label.pack(pady=(0, 20))
+        
+        # Step 1: Create Directories
+        step1_frame = ttk.LabelFrame(content, text=" 📁 Step 1: Initialize Project ", padding="20")
+        step1_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        tk.Label(step1_frame, text="Create required folder structure", 
+                font=("Segoe UI", 9),
+                bg=self.bg_dark,
+                fg=self.fg_secondary).pack(anchor=tk.W, pady=(0,10))
+        
+        self.create_dir_btn = ttk.Button(
+            step1_frame,
+            text="Create Directories",
+            command=self.create_directories
+        )
+        self.create_dir_btn.pack(pady=(0,10))
+        
+        self.dir_status = tk.Label(step1_frame, text="", 
+                                   bg=self.bg_dark, fg=self.fg_secondary,
+                                   font=("Segoe UI", 9))
+        self.dir_status.pack()
+        
+        # Step 2: Install Requirements
+        step2_frame = ttk.LabelFrame(content, text=" 📦 Step 2: Install Dependencies ", padding="20")
+        step2_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        tk.Label(step2_frame, text="Install required Python packages", 
+                font=("Segoe UI", 9),
+                bg=self.bg_dark,
+                fg=self.fg_secondary).pack(anchor=tk.W, pady=(0,10))
+        
+        self.install_btn = ttk.Button(
+            step2_frame,
+            text="Install Requirements",
+            command=self.install_requirements,
+            state=tk.DISABLED
+        )
+        self.install_btn.pack(pady=(0,10))
+        
+        self.progress = ttk.Progressbar(step2_frame, mode='indeterminate', length=300)
+        self.progress.pack()
+        
+        # Step 3: Configuration
+        step3_frame = ttk.LabelFrame(content, text=" ⚙️ Step 3: Server Configuration ", padding="20")
+        step3_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # Create a grid layout for better organization
+        config_grid = ttk.Frame(step3_frame)
+        config_grid.pack(fill=tk.X)
+        
+        # Username
+        tk.Label(config_grid, text="Username:", 
+                font=("Segoe UI", 9, "bold"),
+                bg=self.bg_dark, fg=self.fg_primary).grid(row=0, column=0, sticky=tk.W, pady=8)
+        user_entry = ttk.Entry(config_grid, textvariable=self.basic_user, width=40)
+        user_entry.grid(row=0, column=1, pady=8, padx=(15, 0), sticky=tk.EW)
+        
+        # Password
+        tk.Label(config_grid, text="Password:", 
+                font=("Segoe UI", 9, "bold"),
+                bg=self.bg_dark, fg=self.fg_primary).grid(row=1, column=0, sticky=tk.W, pady=8)
+        pass_entry = ttk.Entry(config_grid, textvariable=self.basic_password, show="●", width=40)
+        pass_entry.grid(row=1, column=1, pady=8, padx=(15, 0), sticky=tk.EW)
+        
+        # Server URL
+        tk.Label(config_grid, text="Server URL:", 
+                font=("Segoe UI", 9, "bold"),
+                bg=self.bg_dark, fg=self.fg_primary).grid(row=2, column=0, sticky=tk.W, pady=8)
+        url_entry = ttk.Entry(config_grid, textvariable=self.external_base_url, width=40)
+        url_entry.grid(row=2, column=1, pady=8, padx=(15, 0), sticky=tk.EW)
+        
+        config_grid.columnconfigure(1, weight=1)
+        
+        # Step 4: MT5 Configuration
+        step4_frame = ttk.LabelFrame(content, text=" 📊 Step 4: MT5 Settings ", padding="20")
+        step4_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # MT5 Executable
+        tk.Label(step4_frame, text="MT5 Executable Path", 
+                font=("Segoe UI", 9, "bold"),
+                bg=self.bg_dark, fg=self.fg_primary).pack(anchor=tk.W, pady=(0,5))
+        
+        tk.Label(step4_frame, text="Select terminal64.exe from your MT5 installation", 
+                font=("Segoe UI", 8),
+                bg=self.bg_dark, fg=self.fg_secondary).pack(anchor=tk.W, pady=(0,8))
+        
+        path_frame = ttk.Frame(step4_frame)
+        path_frame.pack(fill=tk.X, pady=(0,15))
+        
+        path1_entry = ttk.Entry(path_frame, textvariable=self.mt5_main_path)
+        path1_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        
+        browse1_btn = ttk.Button(path_frame, text="Browse", command=self.browse_main_path, width=12)
+        browse1_btn.pack(side=tk.RIGHT)
+        
+        # Instances Directory (read-only info)
+        tk.Label(step4_frame, text="Instances Directory", 
+                font=("Segoe UI", 9, "bold"),
+                bg=self.bg_dark, fg=self.fg_primary).pack(anchor=tk.W, pady=(10,5))
+        
+        tk.Label(step4_frame, text="Auto-created location for MT5 account instances", 
+                font=("Segoe UI", 8),
+                bg=self.bg_dark, fg=self.fg_secondary).pack(anchor=tk.W, pady=(0,8))
+        
+        instances_display = tk.Label(
+            step4_frame,
+            textvariable=self.mt5_instances_dir,
+            font=("Segoe UI", 9),
+            bg=self.bg_input,
+            fg=self.fg_secondary,
+            anchor=tk.W,
+            padx=10,
+            pady=8,
+            relief=tk.FLAT
+        )
+        instances_display.pack(fill=tk.X)
+        
+        # Step 5: Launch
+        step5_frame = ttk.LabelFrame(content, text=" 🚀 Step 5: Start Server ", padding="20")
+        step5_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        tk.Label(step5_frame, text="Ready to launch your trading server", 
+                font=("Segoe UI", 9),
+                bg=self.bg_dark,
+                fg=self.fg_secondary).pack(anchor=tk.W, pady=(0,15))
+        
+        self.start_btn = ttk.Button(
+            step5_frame,
+            text="🚀 Start Server",
+            command=self.start_server,
+            state=tk.DISABLED
+        )
+        self.start_btn.pack()
+        
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+    def create_directories(self):
         """Create required directory structure"""
-        print("Creating directory structure...")
-        
-        directories = [
-            'app',
-            'app/copy_trading',         # ✅ Copy Trading modules
-            'static', 
-            'logs',
-            'data',
-            'data/commands',            # ✅ Commands for EA
-            'mt5_instances',
-            'backup'
-        ]
-        
-        for directory in directories:
-            dir_path = self.base_dir / directory
-            if not dir_path.exists():
-                dir_path.mkdir(parents=True, exist_ok=True)
-                print_success(f"Created directory: {directory}")
-                
-                # ✅ สร้าง .gitkeep ในโฟลเดอร์ว่าง
-                if directory in ['data/commands', 'logs', 'backup']:
-                    gitkeep_file = dir_path / '.gitkeep'
-                    gitkeep_file.touch()
-                    
-            else:
-                print_success(f"Directory exists: {directory}")
-    
-    def install_dependencies(self):
-        """Install Python dependencies"""
-        print("Installing Python dependencies...")
-        
-        requirements_file = self.base_dir / 'requirements.txt'
-        if requirements_file.exists():
-            try:
-                result = subprocess.run([
-                    sys.executable, '-m', 'pip', 'install', '-r', str(requirements_file)
-                ], capture_output=True, text=True)
-                
-                if result.returncode == 0:
-                    print_success("Dependencies installed successfully")
-                else:
-                    print_error(f"Failed to install dependencies: {result.stderr}")
-                    raise Exception("Dependency installation failed")
-            except Exception as e:
-                print_error(f"Error installing dependencies: {str(e)}")
-                raise
-        else:
-            print_warning("requirements.txt not found, skipping dependency installation")
-    
-    def find_mt5_installation(self):
-        """Find MT5 installation path"""
-        print("Searching for MetaTrader 5 installation...")
-        
-        # Common MT5 installation paths
-        common_paths = [
-            r"C:\Program Files\MetaTrader 5\terminal64.exe",
-            r"C:\Program Files (x86)\MetaTrader 5\terminal64.exe",
-            r"C:\Program Files\MetaTrader 5\terminal.exe",
-            r"C:\Program Files (x86)\MetaTrader 5\terminal.exe"
-        ]
-        
-        # Check common paths
-        for path in common_paths:
-            if os.path.exists(path):
-                self.mt5_path = path
-                print_success(f"Found MT5: {path}")
-                break
-        
-        # Try registry search
-        if not self.mt5_path:
-            self.mt5_path = self.find_mt5_in_registry()
-        
-        # Manual input if not found
-        if not self.mt5_path:
-            print_warning("MT5 not found automatically.")
-            while True:
-                user_path = input("Please enter MT5 terminal64.exe path (or 'skip'): ").strip()
-                if user_path.lower() == 'skip':
-                    print_warning("Skipping MT5 path configuration")
-                    break
-                if os.path.exists(user_path) and user_path.endswith(('.exe')):
-                    self.mt5_path = user_path
-                    print_success(f"MT5 path set: {user_path}")
-                    break
-                else:
-                    print_error("Invalid path or file not found")
-        
-        self.config['MT5_MAIN_PATH'] = self.mt5_path or ""
-    
-    def find_mt5_in_registry(self):
-        """Find MT5 path in Windows registry"""
         try:
-            import winreg
-            
-            # Common registry locations for MT5
-            registry_paths = [
-                (winreg.HKEY_CURRENT_USER, r"Software\MetaQuotes\Terminal"),
-                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\MetaQuotes\Terminal"),
-                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\MetaQuotes\Terminal")
+            directories = [
+                'app',
+                'app/copy_trading',
+                'static', 
+                'logs',
+                'data',
+                'data/commands',
+                'mt5_instances',
+                'backup'
             ]
             
-            for hkey, subkey in registry_paths:
-                try:
-                    with winreg.OpenKey(hkey, subkey) as key:
-                        try:
-                            install_path, _ = winreg.QueryValueEx(key, "InstallPath")
-                            terminal_path = os.path.join(install_path, "terminal64.exe")
-                            if os.path.exists(terminal_path):
-                                print_success(f"Found MT5 in registry: {terminal_path}")
-                                return terminal_path
-                        except FileNotFoundError:
-                            continue
-                except FileNotFoundError:
-                    continue
+            created = []
+            for directory in directories:
+                dir_path = self.base_dir / directory
+                if not dir_path.exists():
+                    dir_path.mkdir(parents=True, exist_ok=True)
+                    created.append(directory)
+                    
+                    # Create .gitkeep in empty folders
+                    if directory in ['data/commands', 'logs', 'backup']:
+                        gitkeep_file = dir_path / '.gitkeep'
+                        gitkeep_file.touch()
             
-        except ImportError:
-            print_warning("Registry search not available")
+            if created:
+                self.dir_status.config(
+                    text=f"✓ Created: {', '.join(created)}",
+                    fg=self.accent_green
+                )
+            else:
+                self.dir_status.config(
+                    text="✓ All directories exist",
+                    fg=self.accent_green
+                )
+            
+            # Enable next step
+            self.install_btn.config(state=tk.NORMAL)
+            self.create_dir_btn.config(state=tk.DISABLED)
+            self.status_label.config(
+                text="● Step 1 Complete → Install Requirements",
+                fg=self.accent_green
+            )
+            
         except Exception as e:
-            print_warning(f"Registry search failed: {str(e)}")
-        
-        return None
+            messagebox.showerror("Error", f"Failed to create directories:\n{str(e)}")
+            self.dir_status.config(text=f"✗ Error: {str(e)}", fg=self.accent_red)
     
-    def configure_profile_source(self):
-        """Configure MT5 profile source"""
-        print("Configuring MT5 profile source...")
+    def browse_main_path(self):
+        filename = filedialog.askopenfilename(
+            title="Select MT5 Terminal Executable (terminal64.exe)",
+            filetypes=[("Executable files", "*.exe"), ("All files", "*.*")]
+        )
+        if filename:
+            self.mt5_main_path.set(filename)
+    
+    def install_requirements(self):
+        self.install_btn.config(state=tk.DISABLED)
+        self.progress.start()
+        self.status_label.config(text="● Installing packages...", fg=self.accent_yellow)
         
-        # Try to find MT5 data directory automatically
-        user_profile = os.path.expanduser("~")
-        appdata_roaming = os.path.join(user_profile, "AppData", "Roaming")
-        metaquotes_path = os.path.join(appdata_roaming, "MetaQuotes", "Terminal")
-        
-        profile_source = None
-        
-        if os.path.exists(metaquotes_path):
-            # Look for terminal directories
-            terminal_dirs = []
-            for item in os.listdir(metaquotes_path):
-                item_path = os.path.join(metaquotes_path, item)
-                if os.path.isdir(item_path) and len(item) == 32:  # Terminal hash is 32 chars
-                    # Check if it has required directories
-                    profiles_dir = os.path.join(item_path, "profiles")
-                    config_dir = os.path.join(item_path, "config")
-                    if os.path.exists(profiles_dir) and os.path.exists(config_dir):
-                        terminal_dirs.append(item_path)
-            
-            if terminal_dirs:
-                if len(terminal_dirs) == 1:
-                    profile_source = terminal_dirs[0]
-                    print_success(f"Found MT5 data directory: {profile_source}")
-                else:
-                    print_colored(f"Found {len(terminal_dirs)} MT5 data directories:", Colors.YELLOW)
-                    for i, dir_path in enumerate(terminal_dirs, 1):
-                        print(f"  {i}. {dir_path}")
-                    
-                    while True:
-                        try:
-                            choice = input("Select directory (1-{}): ".format(len(terminal_dirs))).strip()
-                            choice_idx = int(choice) - 1
-                            if 0 <= choice_idx < len(terminal_dirs):
-                                profile_source = terminal_dirs[choice_idx]
-                                print_success(f"Selected: {profile_source}")
-                                break
-                            else:
-                                print_error("Invalid choice")
-                        except ValueError:
-                            print_error("Please enter a number")
-        
-        # Manual input if not found
-        if not profile_source:
-            print_warning("MT5 data directory not found automatically.")
-            print_colored("You need to:", Colors.CYAN)
-            print("1. Open MT5")
-            print("2. Go to File → Open Data Folder")
-            print("3. Copy the path from Windows Explorer")
-            
-            while True:
-                user_path = input("Enter MT5 data folder path (or 'skip'): ").strip()
-                if user_path.lower() == 'skip':
-                    print_warning("Skipping profile source configuration")
-                    break
+        def install():
+            try:
+                requirements = """Flask==2.3.3
+Flask-Limiter==2.8.1
+Flask-Cors==4.0.0
+python-dotenv==1.0.0
+psutil==5.9.6
+requests==2.31.0
+werkzeug==2.3.7
+"""
+                with open("requirements.txt", "w") as f:
+                    f.write(requirements)
                 
-                if os.path.exists(user_path):
-                    profiles_dir = os.path.join(user_path, "profiles")
-                    config_dir = os.path.join(user_path, "config")
-                    
-                    if os.path.exists(profiles_dir) and os.path.exists(config_dir):
-                        profile_source = user_path
-                        print_success(f"Profile source set: {user_path}")
-                        break
-                    else:
-                        print_error("Directory exists but missing 'profiles' or 'config' subdirectories")
-                else:
-                    print_error("Directory not found")
-        
-        self.profile_source = profile_source
-        self.config['MT5_PROFILE_SOURCE'] = profile_source or ""
-        
-        # Set instances directory
-        instances_dir = str(self.base_dir / 'mt5_instances')
-        self.config['MT5_INSTANCES_DIR'] = instances_dir
-        print_success(f"Instances directory: {instances_dir}")
-    
-    def generate_security_config(self):
-        """Generate security configuration"""
-        print("Generating security configuration...")
-        
-        # Generate random tokens and passwords
-        self.config['SECRET_KEY'] = secrets.token_urlsafe(32)
-        self.config['WEBHOOK_TOKEN'] = secrets.token_urlsafe(16)
-        
-        print_success(f"Generated secret key: {self.config['SECRET_KEY'][:8]}...")
-        print_success(f"Generated webhook token: {self.config['WEBHOOK_TOKEN']}")
-        
-        # Basic auth credentials
-        print_colored("\nSetup web interface credentials:", Colors.CYAN)
-        
-        username = input("Admin username (default: admin): ").strip()
-        self.config['BASIC_USER'] = username or 'admin'
-        
-        while True:
-            password = input("Admin password (min 6 chars): ").strip()
-            if len(password) >= 6:
-                self.config['BASIC_PASS'] = password
-                break
-            else:
-                print_error("Password must be at least 6 characters")
-        
-        print_success("Admin credentials configured")
-        
-        # External URL
-        print_colored("\nExternal URL configuration:", Colors.CYAN)
-        print("This is the URL that TradingView will use to send webhooks.")
-        print("Examples: https://yourdomain.com, https://subdomain.example.com")
-        
-        external_url = input("External base URL (default: http://localhost:5000): ").strip()
-        self.config['EXTERNAL_BASE_URL'] = external_url or 'http://localhost:5000'
-        
-        print_success(f"External URL: {self.config['EXTERNAL_BASE_URL']}")
-        
-        # Email configuration (optional)
-        print_colored("\nEmail notifications (optional):", Colors.CYAN)
-        enable_email = input("Enable email notifications? (y/N): ").strip().lower()
-        
-        if enable_email == 'y':
-            self.config['EMAIL_ENABLED'] = 'True'
-            self.config['SMTP_SERVER'] = input("SMTP server (default: smtp.gmail.com): ").strip() or 'smtp.gmail.com'
-            self.config['SMTP_PORT'] = input("SMTP port (default: 587): ").strip() or '587'
-            self.config['SMTP_USER'] = input("SMTP username/email: ").strip()
-            self.config['SMTP_PASS'] = input("SMTP password/app password: ").strip()
-            self.config['FROM_EMAIL'] = input("From email (default: same as SMTP user): ").strip() or self.config['SMTP_USER']
-            self.config['TO_EMAILS'] = input("Alert recipients (comma-separated): ").strip()
-            print_success("Email configuration completed")
-        else:
-            self.config['EMAIL_ENABLED'] = 'False'
-            print_success("Email notifications disabled")
-    
-    def create_config_files(self):
-        """Create configuration files"""
-        print("Creating configuration files...")
-        
-        # Create .env file
-        env_content = []
-        env_content.append("# MT5 Trading Bot Configuration")
-        env_content.append("# Generated by setup wizard")
-        env_content.append("")
-        
-        env_content.append("# Basic Authentication")
-        env_content.append(f"BASIC_USER={self.config.get('BASIC_USER', 'admin')}")
-        env_content.append(f"BASIC_PASS={self.config.get('BASIC_PASS', 'admin')}")
-        env_content.append("")
-        
-        env_content.append("# Security")
-        env_content.append(f"SECRET_KEY={self.config.get('SECRET_KEY', '')}")
-        env_content.append(f"WEBHOOK_TOKEN={self.config.get('WEBHOOK_TOKEN', '')}")
-        env_content.append(f"EXTERNAL_BASE_URL={self.config.get('EXTERNAL_BASE_URL', 'http://localhost:5000')}")
-        env_content.append("")
-        
-        env_content.append("# Server")
-        env_content.append("PORT=5000")
-        env_content.append("DEBUG=False")
-        env_content.append("")
-        
-        env_content.append("# MT5 Configuration")
-        env_content.append(f"MT5_MAIN_PATH={self.config.get('MT5_MAIN_PATH', '')}")
-        env_content.append(f"MT5_INSTANCES_DIR={self.config.get('MT5_INSTANCES_DIR', '')}")
-        env_content.append(f"MT5_PROFILE_SOURCE={self.config.get('MT5_PROFILE_SOURCE', '')}")
-        env_content.append("DELETE_INSTANCE_FILES=False")
-        env_content.append("TRADING_METHOD=file")
-        env_content.append("")
-        
-        env_content.append("# Email Notifications")
-        env_content.append(f"EMAIL_ENABLED={self.config.get('EMAIL_ENABLED', 'False')}")
-        if self.config.get('EMAIL_ENABLED') == 'True':
-            env_content.append(f"SMTP_SERVER={self.config.get('SMTP_SERVER', 'smtp.gmail.com')}")
-            env_content.append(f"SMTP_PORT={self.config.get('SMTP_PORT', '587')}")
-            env_content.append(f"SMTP_USER={self.config.get('SMTP_USER', '')}")
-            env_content.append(f"SMTP_PASS={self.config.get('SMTP_PASS', '')}")
-            env_content.append(f"FROM_EMAIL={self.config.get('FROM_EMAIL', '')}")
-            env_content.append(f"TO_EMAILS={self.config.get('TO_EMAILS', '')}")
-        env_content.append("")
-        
-        env_content.append("# Symbol Mapping")
-        env_content.append("SYMBOL_FETCH_ENABLED=False")
-        env_content.append("FUZZY_MATCH_THRESHOLD=0.6")
-        env_content.append("")
-        
-        env_content.append("# Rate Limiting")
-        env_content.append("RATE_LIMIT_WEBHOOK=10 per minute")
-        env_content.append("RATE_LIMIT_API=100 per hour")
-        
-        # Write .env file
-        env_file = self.base_dir / '.env'
-        with open(env_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(env_content))
-        
-        print_success("Created .env configuration file")
-        
-        # Create startup script
-        self.create_startup_script()
-        
-        # Set file permissions (Windows)
-        try:
-            import stat
-            os.chmod(env_file, stat.S_IREAD | stat.S_IWRITE)
-            print_success("Set secure file permissions on .env")
-        except:
-            print_warning("Could not set file permissions")
-    
-    def create_startup_script(self):
-        """Create startup scripts"""
-        print("Creating startup scripts...")
-        
-        # Windows batch script
-        bat_content = [
-            "@echo off",
-            "title MT5 Trading Bot",
-            "cd /d \"%~dp0\"",
-            "",
-            "echo Starting MT5 Trading Bot...",
-            "echo.",
-            "",
-            "REM Activate virtual environment if it exists",
-            "if exist \"venv\\Scripts\\activate.bat\" (",
-            "    call venv\\Scripts\\activate.bat",
-            "    echo Virtual environment activated",
-            ")",
-            "",
-            "REM Start the server", 
-            "python server.py",
-            "",
-            "pause"
-        ]
-        
-        bat_file = self.base_dir / 'start.bat'
-        with open(bat_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(bat_content))
-        
-        print_success("Created start.bat startup script")
-        
-        # Python startup script
-        py_content = [
-            "#!/usr/bin/env python3",
-            '"""MT5 Trading Bot Startup Script"""',
-            "",
-            "import os",
-            "import sys",
-            "import subprocess",
-            "from pathlib import Path",
-            "",
-            "def main():",
-            "    # Change to script directory",
-            "    script_dir = Path(__file__).parent",
-            "    os.chdir(script_dir)",
-            "",
-            "    # Check if .env exists",
-            "    if not (script_dir / '.env').exists():",
-            "        print('Configuration file .env not found!')",
-            "        print('Please run setup.py first.')",
-            "        sys.exit(1)",
-            "",
-            "    # Start server",
-            "    try:",
-            "        import server",
-            "        # This will import and run the Flask app",
-            "    except ImportError as e:",
-            "        print(f'Failed to import server: {e}')",
-            "        print('Please install dependencies: pip install -r requirements.txt')",
-            "        sys.exit(1)",
-            "    except Exception as e:",
-            "        print(f'Server error: {e}')",
-            "        sys.exit(1)",
-            "",
-            "if __name__ == '__main__':",
-            "    main()"
-        ]
-        
-        py_file = self.base_dir / 'start.py'
-        with open(py_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(py_content))
-        
-        print_success("Created start.py startup script")
-    
-    def test_configuration(self):
-        """Test the configuration"""
-        print("Testing configuration...")
-        
-        # Test MT5 path
-        if self.config.get('MT5_MAIN_PATH'):
-            if os.path.exists(self.config['MT5_MAIN_PATH']):
-                print_success("MT5 executable found")
-            else:
-                print_warning("MT5 executable not found")
-        else:
-            print_warning("MT5 path not configured")
-        
-        # Test profile source
-        if self.config.get('MT5_PROFILE_SOURCE'):
-            if os.path.exists(self.config['MT5_PROFILE_SOURCE']):
-                profiles_dir = os.path.join(self.config['MT5_PROFILE_SOURCE'], 'profiles')
-                config_dir = os.path.join(self.config['MT5_PROFILE_SOURCE'], 'config')
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+                    capture_output=True,
+                    text=True
+                )
                 
-                if os.path.exists(profiles_dir) and os.path.exists(config_dir):
-                    print_success("MT5 profile source valid")
-                else:
-                    print_warning("MT5 profile source missing required directories")
-            else:
-                print_warning("MT5 profile source not found")
+                self.root.after(0, self.installation_complete, result.returncode == 0)
+                
+            except Exception as e:
+                self.root.after(0, self.installation_complete, False, str(e))
+        
+        thread = threading.Thread(target=install)
+        thread.daemon = True
+        thread.start()
+    
+    def installation_complete(self, success, error=None):
+        self.progress.stop()
+        self.install_btn.config(state=tk.NORMAL)
+        
+        if success:
+            self.status_label.config(
+                text="● Step 2 Complete → Configure Settings",
+                fg=self.accent_green
+            )
+            self.start_btn.config(state=tk.NORMAL)
+            messagebox.showinfo(
+                "Success", 
+                "Dependencies installed successfully!\n\nPlease complete the configuration."
+            )
         else:
-            print_warning("MT5 profile source not configured")
-        
-        # Test instances directory
-        instances_dir = self.config.get('MT5_INSTANCES_DIR')
-        if instances_dir:
-            Path(instances_dir).mkdir(parents=True, exist_ok=True)
-            if os.path.exists(instances_dir) and os.access(instances_dir, os.W_OK):
-                print_success("Instances directory accessible")
-            else:
-                print_warning("Instances directory not accessible")
-        
-        # Test webhook URL
-        webhook_url = f"{self.config.get('EXTERNAL_BASE_URL', '')}/webhook/{self.config.get('WEBHOOK_TOKEN', '')}"
-        print_success(f"Webhook URL: {webhook_url}")
+            self.status_label.config(
+                text="● Installation failed",
+                fg=self.accent_red
+            )
+            messagebox.showerror("Error", f"Installation failed:\n{error if error else 'Unknown error'}")
     
-    def setup_complete(self):
-        """Setup completion"""
-        print_header("Setup Complete!")
-        
-        print_colored("🎉 MT5 Trading Bot setup completed successfully!", Colors.GREEN + Colors.BOLD)
-        print()
-        
-        print_colored("Next steps:", Colors.CYAN + Colors.BOLD)
-        print("1. Prepare your MT5 Default profile:")
-        print("   - Open MT5 and configure charts, EAs, and themes as desired")
-        print("   - Save profile as 'Default': File → Profiles → Save As... → Default")
-        print()
-        
-        print("2. Start the bot:")
-        print("   - Double-click 'start.bat' or run 'python server.py'")
-        print("   - Access web interface at http://localhost:5000")
-        print(f"   - Login: {self.config.get('BASIC_USER')} / {self.config.get('BASIC_PASS')}")
-        print()
-        
-        print("3. Configure TradingView webhook:")
-        webhook_url = f"{self.config.get('EXTERNAL_BASE_URL')}/webhook/{self.config.get('WEBHOOK_TOKEN')}"
-        print(f"   - Webhook URL: {webhook_url}")
-        print()
-        
-        # ✅ เพิ่มส่วน Copy Trading
-        print_colored("4. Copy Trading Setup:", Colors.YELLOW + Colors.BOLD)
-        print("   - Go to Copy Trading page in web interface")
-        print("   - Add Master and Slave accounts")
-        print("   - Create Copy Pair to get API Token")
-        print("   - Configure Master EA with the API Token")
-        print("   - Master EA will send signals to: /api/copy/trade")
-        print()
-        
-        print("5. For external access, setup Cloudflare Tunnel:")
-        print("   - Install cloudflared")
-        print("   - Run: cloudflared tunnel --url http://localhost:5000")
-        print()
-        
-        print_colored("Configuration files created:", Colors.YELLOW)
-        print("✓ .env - Main configuration")
-        print("✓ start.bat - Windows startup script")
-        print("✓ start.py - Python startup script")
-        print()
-        
-        # ✅ เพิ่มส่วน Copy Trading folders
-        print_colored("Copy Trading folders created:", Colors.YELLOW)
-        print("✓ app/copy_trading/ - Copy Trading modules")
-        print("✓ data/commands/ - EA command storage")
-        print()
-        
-        print_colored("Happy trading! 🚀", Colors.GREEN + Colors.BOLD)
-
-def main():
-    """Main setup function"""
-    if len(sys.argv) > 1 and sys.argv[1] == '--help':
-        print("MT5 Trading Bot Setup Script")
-        print("Usage: python setup.py")
-        print()
-        print("This script will guide you through setting up the MT5 Trading Bot.")
-        return
+    def validate_inputs(self):
+        if not self.basic_user.get():
+            messagebox.showwarning("Validation Error", "Please enter a username")
+            return False
+        if not self.basic_password.get():
+            messagebox.showwarning("Validation Error", "Please enter a password")
+            return False
+        if len(self.basic_password.get()) < 6:
+            messagebox.showwarning("Validation Error", "Password must be at least 6 characters")
+            return False
+        if not self.external_base_url.get():
+            messagebox.showwarning("Validation Error", "Please enter server URL")
+            return False
+        if not self.mt5_main_path.get():
+            messagebox.showwarning("Validation Error", "Please select MT5 executable")
+            return False
+        if not os.path.exists(self.mt5_main_path.get()):
+            messagebox.showerror("Error", "MT5 executable not found")
+            return False
+        return True
     
-    # Check if already configured
-    env_file = Path('.env')
-    if env_file.exists():
-        print_colored("Configuration file already exists!", Colors.YELLOW)
-        overwrite = input("Overwrite existing configuration? (y/N): ").strip().lower()
-        if overwrite != 'y':
-            print("Setup cancelled.")
+    def start_server(self):
+        if not self.validate_inputs():
             return
+        
+        try:
+            import secrets
+            secret_key = secrets.token_urlsafe(32)
+            webhook_token = secrets.token_urlsafe(16)
+            
+            env_content = f"""# Server Configuration
+SECRET_KEY={secret_key}
+BASIC_USER={self.basic_user.get()}
+BASIC_PASS={self.basic_password.get()}
+EXTERNAL_BASE_URL={self.external_base_url.get()}
+
+# Webhook Configuration
+WEBHOOK_TOKEN={webhook_token}
+WEBHOOK_RATE_LIMIT=60/minute
+
+# MT5 Configuration
+MT5_MAIN_PATH={self.mt5_main_path.get()}
+MT5_PROFILE_SOURCE=
+MT5_INSTANCES_DIR={self.mt5_instances_dir.get()}
+
+# Email Configuration (Optional)
+EMAIL_NOTIFICATIONS_ENABLED=false
+SMTP_SERVER=
+SMTP_PORT=587
+SMTP_USE_TLS=true
+SMTP_USER=
+SMTP_PASS=
+EMAIL_FROM=
+EMAIL_TO=
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE=logs/trading_bot.log
+"""
+            
+            with open(".env", "w") as f:
+                f.write(env_content)
+            
+            if not os.path.exists("server.py"):
+                self.create_server_file()
+            
+            webhook_url = f"{self.external_base_url.get()}/webhook/{webhook_token}"
+            
+            result = messagebox.askokcancel(
+                "Ready to Launch",
+                f"✓ Configuration complete!\n\n"
+                f"Web Interface: {self.external_base_url.get()}\n"
+                f"Username: {self.basic_user.get()}\n\n"
+                f"Webhook URL:\n{webhook_url}\n\n"
+                f"Start the server now?"
+            )
+            
+            if result:
+                self.status_label.config(text="● Server starting...", fg=self.accent_blue)
+                
+                if sys.platform == "win32":
+                    subprocess.Popen('start cmd /k python server.py', shell=True)
+                else:
+                    subprocess.Popen([sys.executable, "server.py"])
+                
+                self.status_label.config(text="● Server is running!", fg=self.accent_green)
+                
+                messagebox.showinfo(
+                    "Server Started",
+                    f"Server is now running!\n\n"
+                    f"Access: {self.external_base_url.get()}\n\n"
+                    f"Use this webhook in TradingView:\n{webhook_url}"
+                )
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to start server:\n{str(e)}")
+            self.status_label.config(text="● Error occurred", fg=self.accent_red)
     
-    # Run setup
-    setup = MT5TradingBotSetup()
-    setup.run_setup()
+    def create_server_file(self):
+        """Create a basic server.py file"""
+        server_content = """from flask import Flask, request, jsonify, send_from_directory
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from functools import wraps
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = Flask(__name__, static_folder='static')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"]
+)
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not (auth.username == os.getenv('BASIC_USER') and 
+                           auth.password == os.getenv('BASIC_PASS')):
+            return jsonify({'error': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+@app.route('/')
+@require_auth
+def home():
+    return send_from_directory('static', 'index.html')
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'running', 'message': 'MT5 Bridge Server'})
+
+@app.route('/webhook/<token>', methods=['POST'])
+@limiter.limit(os.getenv('WEBHOOK_RATE_LIMIT', '60/minute'))
+def webhook(token):
+    if token != os.getenv('WEBHOOK_TOKEN'):
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    try:
+        data = request.json
+        print(f"Received webhook: {data}")
+        return jsonify({'status': 'success', 'data': data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == '__main__':
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
+"""
+        with open("server.py", "w") as f:
+            f.write(server_content)
+
+def main():
+    root = tk.Tk()
+    app = SetupWizard(root)
+    root.mainloop()
+
+if __name__ == "__main__":
     main()
