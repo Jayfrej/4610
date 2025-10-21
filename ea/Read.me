@@ -1,0 +1,209 @@
+# All-in-One Trading EA v2.2
+
+Multi-mode MT5 Expert Advisor supporting Webhook, Master, and Slave trading modes.
+
+## Features
+
+- **Webhook Mode**: Receive trading signals via JSON files
+- **Master Mode**: Send trading signals to remote server via HTTP
+- **Slave Mode**: Execute trading signals from JSON files (copy trading)
+
+## Installation
+
+1. Copy `AllInOneTradingEA.mq5` to `MT5/MQL5/Experts/`
+2. Compile in MetaEditor
+3. Attach to any chart
+4. Configure desired mode(s) in EA settings
+
+## Settings Overview
+
+### Mode Selection
+- **EnableWebhook**: Enable webhook signal processing
+- **EnableMaster**: Enable sending signals to server
+- **EnableSlave**: Enable receiving signals from master
+
+### Webhook Settings
+- **WebhookCloseOppositeBeforeOpen**: Auto-close opposite positions before opening new ones
+- **WebhookAutoCloseBySymbol**: Fallback to close all symbol positions if specific close method fails
+- **Webhook_AutoLinkInstance**: Automatically create junction to instance folder
+- **Webhook_InstanceRootPath**: Path to trading bot instances
+- **Webhook_FilePattern**: JSON file pattern to watch (e.g., `webhook_command_*.json`)
+- **Webhook_PollingSeconds**: File check interval in seconds
+- **Webhook_DeleteAfterProcess**: Delete JSON files after execution
+
+### Master Settings
+- **Master_ServerURL**: API endpoint URL (e.g., `http://localhost:5000`)
+- **Master_APIKey**: Authentication key from copy pair server
+- **Master_SendOnOpen**: Send signal when position opens
+- **Master_SendOnClose**: Send signal when position closes
+- **Master_SendOnModify**: Send signal when TP/SL modified
+- **Master_HttpTimeoutMs**: HTTP request timeout in milliseconds
+
+### Slave Settings
+- **Slave_AutoLinkInstance**: Automatically create junction to instance folder
+- **Slave_InstanceRootPath**: Path to trading bot instances
+- **Slave_FilePattern**: JSON file pattern to watch (e.g., `slave_command_*.json`)
+- **Slave_PollingSeconds**: File check interval in seconds
+- **Slave_DeleteAfterProcess**: Delete JSON files after execution
+
+### Trade Settings
+- **DefaultVolume**: Default lot size when not specified
+- **Slippage**: Maximum slippage in points
+- **TradeComment**: Comment prefix for trades
+- **MagicNumberInput**: Magic number (0 = auto-generate from account)
+
+### Logging
+- **EnableLogging**: Enable file logging
+- **LogLevel**: Minimum log level (DEBUG/INFO/WARNING/ERROR)
+
+## JSON Command Format
+
+### Open Position
+```json
+{
+  "action": "buy",
+  "symbol": "EURUSD",
+  "volume": 0.10,
+  "tp": 1.1050,
+  "sl": 1.1000,
+  "comment": "my_trade"
+}
+```
+
+### Close Position (Multiple Methods)
+
+**Method 1: By Comment**
+```json
+{
+  "action": "close",
+  "symbol": "EURUSD",
+  "comment": "my_trade"
+}
+```
+
+**Method 2: By Ticket**
+```json
+{
+  "action": "close",
+  "symbol": "EURUSD",
+  "ticket": 123456789
+}
+```
+
+**Method 3: By Index**
+```json
+{
+  "action": "close",
+  "symbol": "EURUSD",
+  "index": 1
+}
+```
+
+**Method 4: By Volume**
+```json
+{
+  "action": "close",
+  "symbol": "EURUSD",
+  "volume": 0.50
+}
+```
+
+**Method 5: All Symbol Positions**
+```json
+{
+  "action": "close_symbol",
+  "symbol": "EURUSD"
+}
+```
+
+### Modify Position
+```json
+{
+  "action": "modify",
+  "symbol": "EURUSD",
+  "ticket": 123456789,
+  "tp": 1.1100,
+  "sl": 1.0950
+}
+```
+
+## Close Priority Logic
+
+When using `action: "close"` without specific identifier:
+
+1. **Try close by comment** (if provided)
+2. **Try close by ticket** (if provided)
+3. **Try close by index** (if provided)
+4. **Try close by volume** (if provided)
+5. **Fallback**: Close all symbol positions (if `WebhookAutoCloseBySymbol=true`)
+
+## Volume Handling
+
+- Closes **exact volume** specified
+- Supports **partial closes** across multiple orders
+- Example: 5 orders of 0.20 lots each
+  - `volume: 0.20` → Closes 1 order
+  - `volume: 0.50` → Closes 2.5 orders
+  - `volume: 10.0` → Closes all (max available)
+
+## File Structure
+
+```
+C:\trading_bot\mt5_instances\
+└── [ACCOUNT_NUMBER]\
+    └── MQL5\
+        └── Files\
+            ├── webhook_command_*.json
+            └── slave_command_*.json
+```
+
+EA automatically creates junction if `AutoLinkInstance=true`
+
+## Logs
+
+Log files saved in: `MT5/MQL5/Files/AllInOneEA_[ACCOUNT].log`
+
+Sample log:
+```
+[INFO] 2025.10.21 14:00:03 [WEBHOOK] Processing file [1/2]: webhook_command_xxx.json
+[INFO] 2025.10.21 14:00:03 [WEBHOOK] Parsed: action=buy sym=EURUSD vol=0.10
+[INFO] 2025.10.21 14:00:03 [1] Order executed: buy EURUSD 0.10 @ 1.10450
+```
+
+## Troubleshooting
+
+**Files not detected:**
+- Check `InstanceRootPath` matches your setup
+- Enable `AutoLinkInstance` or manually create junction
+- Set `LogLevel=LOG_DEBUG` to see detailed file processing
+
+**Master signals not sending:**
+- Add `Master_ServerURL` to MT5 allowed URLs (Tools → Options → Expert Advisors)
+- Verify `Master_APIKey` is correct
+- Check server is running and accessible
+
+**Positions not closing:**
+- Set `WebhookAutoCloseBySymbol=true` for fallback behavior
+- Verify symbol name matches broker format
+- Check log for specific error messages
+
+## Notes
+
+- Multiple modes can run simultaneously
+- Each mode processes files independently with thread-safe locks
+- File processing uses isolation strategy to prevent race conditions
+- All trading operations logged with unique process IDs
+
+## Version History
+
+- **v2.2**: Fixed concurrent file processing and volume close logic
+- **v2.1**: Added auto-close by symbol fallback for webhook
+- **v2.0**: Multi-mode support (Webhook + Master + Slave)
+
+## License
+
+MIT License
+
+## Support
+
+For issues and feature requests, visit: https://github.com/Jayferj
