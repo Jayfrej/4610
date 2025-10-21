@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                        AllInOneTradingEA.mq5     |
 //|                    Multi-Mode: Webhook + Master + Slave          |
-//|  v2.0 - Support concurrent execution of multiple modes           |
+//|  v2.2 - Fixed concurrent file processing & race conditions      |
 //+------------------------------------------------------------------+
 #property copyright "MT5 Trading Bot"
 #property link      "https://github.com/Jayferj"
-#property version   "2.00"
+#property version   "2.20"
 #property strict
 
 //==================== Enums ====================
@@ -24,7 +24,8 @@ input bool EnableMaster = false;                           // ? Enable Master Mo
 input bool EnableSlave = false;                            // ? Enable Slave Mode
 
 input group "=== Webhook Settings ==="
-input bool WebhookCloseOppositeBeforeOpen = false;   // Close opposite positions before opening (Webhook)
+input bool WebhookCloseOppositeBeforeOpen = true;    // Close opposite positions before opening (Webhook)
+input bool WebhookAutoCloseBySymbol = true;          // Auto close by symbol if no ticket/comment/index (Webhook)
 
 input bool   Webhook_AutoLinkInstance = true;              // Auto-link instance folder
 input string Webhook_InstanceRootPath = "C:\\trading_bot\\mt5_instances"; // Instance root path
@@ -80,8 +81,10 @@ double MasterVolumes[];
 double MasterTPs[];
 double MasterSLs[];
 
-// Thread-safe counter for concurrent processing
+// Thread-safe counter and locks
 int g_processing_counter = 0;
+bool g_webhook_processing_lock = false;
+bool g_slave_processing_lock = false;
 
 //==================== Imports ====================
 #import "shell32.dll"
@@ -281,11 +284,11 @@ bool SendOrderAdvanced(string action, string order_type, string sym,
    string act = ToLower(action), ot = ToLower(order_type);
    if(act == "long") act = "buy";
    if(act == "short") act = "sell";
+   
    // Pre-close opposite positions for Webhook if enabled
    if(source == "WEBHOOK" && WebhookCloseOppositeBeforeOpen && (act == "buy" || act == "sell")) {
       CloseOppositePositionsBySymbol(realSym, act, "WEBHOOK");
    }
-
    
    MqlTradeRequest req;
    ZeroMemory(req);
@@ -348,7 +351,7 @@ bool ClosePositionsByAmount(string sym, double reqVolume, string source = "") {
    g_processing_counter++;
    int process_id = g_processing_counter;
    
-   LogMessage(LOG_DEBUG, "[" + IntegerToString(process_id) + "] Processing " + source + " close: " + sym);
+   LogMessage(LOG_DEBUG, "[" + IntegerToString(process_id) + "] Processing " + source + " close: " + sym + " volume: " + DoubleToString(reqVolume, 2));
    
    string realSym = ResolveSymbol(sym);
    if(realSym == "") {
@@ -365,7 +368,7 @@ bool ClosePositionsByAmount(string sym, double reqVolume, string source = "") {
    
    if(totalVol <= 0.0) {
       LogMessage(LOG_INFO, "[" + IntegerToString(process_id) + "] No positions to close for " + realSym);
-      return true;
+      return false; // Changed from true to false - critical fix!
    }
    
    double target = reqVolume;
@@ -415,8 +418,6 @@ bool ClosePositionsByAmount(string sym, double reqVolume, string source = "") {
    return any;
 }
 
-
-// === Added helpers for precise close/modify (2025-10-13) ===
 bool CloseAllPositionsBySymbol(string sym, string source = "SLAVE") {
    string realSym = ResolveSymbol(sym);
    if(realSym == "") {
@@ -467,8 +468,6 @@ bool ClosePositionByTicket(ulong ticket, string source = "SLAVE") {
    return ok;
 }
 
-
-// === Added CloseOppositePositions helper (2025-10-13) ===
 bool CloseOppositePositionsBySymbol(string sym, string incoming_action, string source = "WEBHOOK") {
    string realSym = ResolveSymbol(sym);
    if(realSym == "") {
@@ -481,7 +480,6 @@ bool CloseOppositePositionsBySymbol(string sym, string incoming_action, string s
    if(act == "sell") targetType = POSITION_TYPE_BUY;
    if(targetType < 0) return false;
 
-   // Collect tickets first to avoid iteration issues
    ulong toClose[];
    for(int i = 0; i < PositionsTotal(); ++i) {
       ulong t = PositionGetTicket(i);
@@ -500,16 +498,12 @@ bool CloseOppositePositionsBySymbol(string sym, string incoming_action, string s
    }
    return any;
 }
-// === End CloseOppositePositions helper ===
-
-
-
 
 int CollectSymbolTickets(string sym, ulong &tickets[]) {
    ArrayResize(tickets, 0);
    string realSym = ResolveSymbol(sym);
    if(realSym == "") return 0;
-   // First collect
+   
    for(int i = 0; i < PositionsTotal(); ++i) {
       ulong t = PositionGetTicket(i);
       if(!PositionSelectByTicket(t)) continue;
@@ -518,7 +512,7 @@ int CollectSymbolTickets(string sym, ulong &tickets[]) {
       ArrayResize(tickets, n+1);
       tickets[n] = t;
    }
-   // Sort by open time ascending
+   
    int n = ArraySize(tickets);
    for(int i = 0; i < n; ++i) {
       for(int j = i+1; j < n; ++j) {
@@ -604,8 +598,7 @@ bool ModifyPositionByIndex(string sym, int index1based, double sl, double tp) {
    }
    return ModifyPositionByTicket(tickets[idx], sl, tp);
 }
-// === End helpers ===
-// === Added comment-based helpers (2025-10-13) ===
+
 bool ClosePositionByExactComment(string targetComment, string source = "SLAVE") {
    if(targetComment == "") return false;
    for(int i = PositionsTotal() - 1; i >= 0; --i) {
@@ -633,320 +626,513 @@ bool ModifyPositionByExactComment(string targetComment, double sl, double tp) {
    LogMessage(LOG_WARNING, "[MODIFY_COMMENT] Not found comment: " + targetComment);
    return false;
 }
-// === End comment-based helpers ===
-
-
-
-
 
 //==================== File I/O (Thread-Safe) ====================
 bool ReadAllText(const string path, string &out) {
-   int h = FileOpen(path, FILE_READ | FILE_BIN);
-   if(h == INVALID_HANDLE) return false;
+   // Add retry mechanism for concurrent file access
+   int max_retries = 3;
+   int retry_count = 0;
    
-   int sz = (int)FileSize(h);
-   if(sz == 0) {
+   while(retry_count < max_retries) {
+      ResetLastError();
+      int h = FileOpen(path, FILE_READ | FILE_BIN);
+      
+      if(h == INVALID_HANDLE) {
+         int err = GetLastError();
+         if(err == 5004 || err == 4006) { // File busy or not found
+            retry_count++;
+            Sleep(50); // Wait 50ms before retry
+            continue;
+         }
+         LogMessage(LOG_ERROR, "[FILE_READ] Cannot open: " + path + " Error: " + IntegerToString(err));
+         return false;
+      }
+      
+      int sz = (int)FileSize(h);
+      if(sz == 0) {
+         FileClose(h);
+         out = "";
+         return true;
+      }
+      
+      char data[];
+      ArrayResize(data, sz);
+      int n = FileReadArray(h, data, 0, sz);
       FileClose(h);
-      out = "";
+      
+      if(n <= 0) {
+         out = "";
+         return true;
+      }
+      
+      int start = 0;
+      if(n >= 3 && (uchar)data[0] == 0xEF && (uchar)data[1] == 0xBB && (uchar)data[2] == 0xBF)
+         start = 3;
+      
+      out = CharArrayToString(data, start, n - start);
       return true;
    }
    
-   char data[];
-   ArrayResize(data, sz);
-   int n = FileReadArray(h, data, 0, sz);
-   FileClose(h);
-   
-   if(n <= 0) {
-      out = "";
-      return true;
-   }
-   
-   int start = 0;
-   if(n >= 3 && (uchar)data[0] == 0xEF && (uchar)data[1] == 0xBB && (uchar)data[2] == 0xBF)
-      start = 3;
-   
-   out = CharArrayToString(data, start, n - start);
-   return true;
+   LogMessage(LOG_ERROR, "[FILE_READ] Max retries exceeded: " + path);
+   return false;
 }
 
 void CleanupFile(const string full, bool delete_flag) {
-   if(delete_flag) FileDelete(full);
+   if(!delete_flag) return;
+   
+   // Verify file exists before deletion
+   if(!FileIsExist(full)) {
+      LogMessage(LOG_DEBUG, "[FILE_CLEANUP] File already deleted: " + full);
+      return;
+   }
+   
+   // Add retry mechanism for file deletion
+   int max_retries = 3;
+   int retry_count = 0;
+   
+   while(retry_count < max_retries) {
+      ResetLastError();
+      if(FileDelete(full)) {
+         LogMessage(LOG_DEBUG, "[FILE_CLEANUP] Deleted: " + full);
+         return;
+      }
+      
+      int err = GetLastError();
+      if(err == 5004) { // File busy
+         retry_count++;
+         Sleep(100);
+         continue;
+      }
+      
+      LogMessage(LOG_WARNING, "[FILE_CLEANUP] Cannot delete: " + full + " Error: " + IntegerToString(err));
+      return;
+   }
+   
+   LogMessage(LOG_ERROR, "[FILE_CLEANUP] Max retries exceeded for: " + full);
 }
 
 //==================== Webhook Mode ====================
 bool ProcessWebhookFile(const string base, const string pattern, bool delete_flag) {
+   // Collect all files first (isolation strategy)
+   string files[];
+   int file_count = 0;
+   
    string mask = (base == "" ? pattern : base + "\\" + pattern);
    string found = "";
-   bool processed_any = false;
+   
    long h = FileFindFirst(mask, found, 0);
    if(h == INVALID_HANDLE) return false;
+   
+   // Collect all matching files
    do {
-      if(found == "") break;
-      string full = (base == "" ? found : base + "\\" + found);
-      string js;
-      if(!ReadAllText(full, js)) {
-         LogMessage(LOG_ERROR, "[WEBHOOK] Cannot read " + full);
-         // skip this file
-      } else {
-         // Parse JSON
-         string sym = GetVal(js, "broker_symbol");
-         if(sym == "") sym = GetVal(js, "symbol");
-         if(sym == "") sym = GetVal(js, "original_symbol");
-
-         string action = ToLower(GetVal(js, "action"));
-         if(action == "long") action = "buy";
-         if(action == "short") action = "sell";
-
-         string otype = ToLower(GetVal(js, "order_type"));
-         string comment = GetVal(js, "comment");
-         double vol = StringToDouble(GetVal(js, "volume"));
-         if(vol <= 0) vol = DefaultVolume;
-
-         string tp_s = GetVal(js, "tp");
-         if(tp_s == "") tp_s = GetVal(js, "take_profit");
-         string sl_s = GetVal(js, "sl");
-         if(sl_s == "") sl_s = GetVal(js, "stop_loss");
-         double tp = StringToDouble(tp_s);
-         double sl = StringToDouble(sl_s);
-         double price = StringToDouble(GetVal(js, "price"));
-         string exp = GetVal(js, "expire");
-
-         string cmdtype = ToLower(GetVal(js, "command_type"));
-         string close_by = ToLower(GetVal(js, "close_by"));
-         string index_s = GetVal(js, "index");
-         string ticket_s = GetVal(js, "ticket");
-         if(ticket_s == "") ticket_s = GetVal(js, "position_ticket");
-
-         // Close logic / modify logic handled in dedicated branch inside file-specific processors (existing logic)
-         // Reuse existing handlers by calling the same code path: we'll mimic the single-file body by reusing SendOrderAdvanced etc.
-
-         // --- Begin inlined logic (kept consistent with previous Process*File) ---
-         if(action == "close_symbol") {
-            CloseAllPositionsBySymbol(sym, "WEBHOOK");
-            CleanupFile(full, delete_flag);
-            processed_any = true;
-            continue;
-         } else if(action == "close" || cmdtype == "close_position") {
-            if(comment != "") {
-               ClosePositionByExactComment(comment, "WEBHOOK");
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            if(ticket_s != "") {
-               ulong tk = (ulong)StringToInteger(ticket_s);
-               ClosePositionByTicket(tk, "WEBHOOK");
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            int idx = (index_s != "" ? (int)StringToInteger(index_s) : 0);
-            if(idx > 0) {
-               ClosePositionByIndex(sym, idx, "WEBHOOK");
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            double reqVol = StringToDouble(GetVal(js, "volume"));
-            ClosePositionsByAmount(sym, reqVol, "WEBHOOK");
-            CleanupFile(full, delete_flag);
-            processed_any = true;
-            continue;
-         }
-
-         if(action == "modify" || cmdtype == "modify_position") {
-            double newTP = StringToDouble(GetVal(js, "tp"));
-            if(newTP == 0) newTP = StringToDouble(GetVal(js, "take_profit"));
-            double newSL = StringToDouble(GetVal(js, "sl"));
-            if(newSL == 0) newSL = StringToDouble(GetVal(js, "stop_loss"));
-
-            if(comment != "") {
-               ModifyPositionByExactComment(comment, newSL, newTP);
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            if(ticket_s != "") {
-               ulong tk2 = (ulong)StringToInteger(ticket_s);
-               ModifyPositionByTicket(tk2, newSL, newTP);
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            int idxm = (index_s != "" ? (int)StringToInteger(index_s) : 0);
-            if(idxm > 0) {
-               ModifyPositionByIndex(sym, idxm, newSL, newTP);
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            ModifyPositionsBySymbol(sym, newSL, newTP);
-            CleanupFile(full, delete_flag);
-            processed_any = true;
-            continue;
-         }
-
-         // Open orders (buy/sell)
-         if(action != "buy" && action != "sell") {
-            LogMessage(LOG_WARNING, "[WEBHOOK] Unknown action: " + action);
-            CleanupFile(full, delete_flag);
-            processed_any = true;
-            continue;
-         }
-         SendOrderAdvanced(action, otype, sym, vol, price, sl, tp, comment, exp, "WEBHOOK");
-         CleanupFile(full, delete_flag);
-         processed_any = true;
-         continue;
-         // --- End inlined logic ---
+      if(found != "" && found != "." && found != "..") {
+         ArrayResize(files, file_count + 1);
+         files[file_count] = (base == "" ? found : base + "\\" + found);
+         file_count++;
       }
    } while(FileFindNext(h, found));
    FileFindClose(h);
-   return processed_any;
+   
+   if(file_count == 0) return false;
+   
+   LogMessage(LOG_DEBUG, "[WEBHOOK] Found " + IntegerToString(file_count) + " files to process");
+   
+   // Process each file independently
+   bool processed_any = false;
+   for(int i = 0; i < file_count; i++) {
+      string full = files[i];
+      
+      // Check if file still exists (may have been deleted by concurrent process)
+      if(!FileIsExist(full)) {
+         LogMessage(LOG_DEBUG, "[WEBHOOK] File already processed: " + full);
+         continue;
+      }
+      
+      LogMessage(LOG_INFO, "[WEBHOOK] Processing file [" + IntegerToString(i+1) + "/" + IntegerToString(file_count) + "]: " + full);
+      
+      string js;
+      if(!ReadAllText(full, js)) {
+         LogMessage(LOG_ERROR, "[WEBHOOK] Cannot read " + full);
+         CleanupFile(full, delete_flag);
+         continue;
+      }
+      
+      if(js == "") {
+         LogMessage(LOG_WARNING, "[WEBHOOK] Empty file: " + full);
+         CleanupFile(full, delete_flag);
+         continue;
+      }
+      
+      LogMessage(LOG_DEBUG, "[WEBHOOK] File content: " + StringSubstr(js, 0, MathMin(200, (int)StringLen(js))));
+      
+      // Parse JSON
+      string sym = GetVal(js, "broker_symbol");
+      if(sym == "") sym = GetVal(js, "symbol");
+      if(sym == "") sym = GetVal(js, "original_symbol");
 
+      string action = ToLower(GetVal(js, "action"));
+      if(action == "long") action = "buy";
+      if(action == "short") action = "sell";
+
+      string otype = ToLower(GetVal(js, "order_type"));
+      string comment = GetVal(js, "comment");
+      double vol = StringToDouble(GetVal(js, "volume"));
+      if(vol <= 0) vol = DefaultVolume;
+
+      string tp_s = GetVal(js, "tp");
+      if(tp_s == "") tp_s = GetVal(js, "take_profit");
+      string sl_s = GetVal(js, "sl");
+      if(sl_s == "") sl_s = GetVal(js, "stop_loss");
+      double tp = StringToDouble(tp_s);
+      double sl = StringToDouble(sl_s);
+      double price = StringToDouble(GetVal(js, "price"));
+      string exp = GetVal(js, "expire");
+
+      string cmdtype = ToLower(GetVal(js, "command_type"));
+      string index_s = GetVal(js, "index");
+      string ticket_s = GetVal(js, "ticket");
+      if(ticket_s == "") ticket_s = GetVal(js, "position_ticket");
+      
+      LogMessage(LOG_INFO, "[WEBHOOK] Parsed: action=" + action + " sym=" + sym + " vol=" + DoubleToString(vol,2) + " comment=" + comment);
+
+      // === CLOSE LOGIC WITH AUTO SYMBOL FALLBACK ===
+      if(action == "close_symbol") {
+         LogMessage(LOG_INFO, "[WEBHOOK] Command: CLOSE_SYMBOL for " + sym);
+         CloseAllPositionsBySymbol(sym, "WEBHOOK");
+         CleanupFile(full, delete_flag);
+         processed_any = true;
+         continue;
+      } else if(action == "close" || cmdtype == "close_position") {
+         LogMessage(LOG_INFO, "[WEBHOOK] Command: CLOSE for " + sym);
+         bool handled = false;
+         
+         // Priority 1: Try close by comment
+         if(!handled && comment != "") {
+            LogMessage(LOG_DEBUG, "[WEBHOOK] Trying close by comment: " + comment);
+            if(ClosePositionByExactComment(comment, "WEBHOOK")) {
+               handled = true;
+               LogMessage(LOG_INFO, "[WEBHOOK] ? Closed by comment: " + comment);
+            } else {
+               LogMessage(LOG_DEBUG, "[WEBHOOK] Comment not found, trying next method...");
+            }
+         }
+         
+         // Priority 2: Try close by ticket (only if ticket > 0)
+         if(!handled && ticket_s != "") {
+            ulong tk = (ulong)StringToInteger(ticket_s);
+            if(tk > 0) {
+               LogMessage(LOG_DEBUG, "[WEBHOOK] Trying close by ticket: " + IntegerToString((int)tk));
+               if(ClosePositionByTicket(tk, "WEBHOOK")) {
+                  handled = true;
+                  LogMessage(LOG_INFO, "[WEBHOOK] ? Closed by ticket: " + IntegerToString((int)tk));
+               } else {
+                  LogMessage(LOG_DEBUG, "[WEBHOOK] Ticket not found, trying next method...");
+               }
+            }
+         }
+         
+         // Priority 3: Try close by index
+         if(!handled && index_s != "") {
+            int idx = (int)StringToInteger(index_s);
+            if(idx > 0) {
+               LogMessage(LOG_DEBUG, "[WEBHOOK] Trying close by index: " + IntegerToString(idx));
+               if(ClosePositionByIndex(sym, idx, "WEBHOOK")) {
+                  handled = true;
+                  LogMessage(LOG_INFO, "[WEBHOOK] ? Closed by index: " + IntegerToString(idx));
+               } else {
+                  LogMessage(LOG_DEBUG, "[WEBHOOK] Index out of range, trying next method...");
+               }
+            }
+         }
+         
+         // Priority 4: Try close by volume (if volume > 0 specified)
+         if(!handled) {
+            double reqVol = StringToDouble(GetVal(js, "volume"));
+            if(reqVol > 0) {
+               LogMessage(LOG_DEBUG, "[WEBHOOK] Trying close by volume: " + DoubleToString(reqVol,2));
+               if(ClosePositionsByAmount(sym, reqVol, "WEBHOOK")) {
+                  handled = true;
+                  LogMessage(LOG_INFO, "[WEBHOOK] ? Closed by volume: " + DoubleToString(reqVol,2));
+               } else {
+                  LogMessage(LOG_DEBUG, "[WEBHOOK] Volume close failed, trying next method...");
+               }
+            }
+         }
+         
+         // === DEFAULT FALLBACK: Close all positions by symbol ===
+         if(!handled && sym != "") {
+            LogMessage(LOG_INFO, "[WEBHOOK] Using default: closing all " + sym + " positions");
+            CloseAllPositionsBySymbol(sym, "WEBHOOK");
+            handled = true;
+         }
+         
+         if(!handled) {
+            LogMessage(LOG_WARNING, "[WEBHOOK] Cannot close - no valid symbol or identifier provided");
+         }
+         
+         CleanupFile(full, delete_flag);
+         processed_any = true;
+         continue;
+      }
+
+      // === MODIFY LOGIC ===
+      if(action == "modify" || cmdtype == "modify_position") {
+         LogMessage(LOG_INFO, "[WEBHOOK] Command: MODIFY for " + sym);
+         double newTP = StringToDouble(GetVal(js, "tp"));
+         if(newTP == 0) newTP = StringToDouble(GetVal(js, "take_profit"));
+         double newSL = StringToDouble(GetVal(js, "sl"));
+         if(newSL == 0) newSL = StringToDouble(GetVal(js, "stop_loss"));
+
+         if(comment != "") {
+            ModifyPositionByExactComment(comment, newSL, newTP);
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         if(ticket_s != "") {
+            ulong tk2 = (ulong)StringToInteger(ticket_s);
+            ModifyPositionByTicket(tk2, newSL, newTP);
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         int idxm = (index_s != "" ? (int)StringToInteger(index_s) : 0);
+         if(idxm > 0) {
+            ModifyPositionByIndex(sym, idxm, newSL, newTP);
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         ModifyPositionsBySymbol(sym, newSL, newTP);
+         CleanupFile(full, delete_flag);
+         processed_any = true;
+         continue;
+      }
+
+      // === OPEN ORDERS (BUY/SELL) ===
+      if(action != "buy" && action != "sell") {
+         LogMessage(LOG_WARNING, "[WEBHOOK] Unknown action: " + action);
+         CleanupFile(full, delete_flag);
+         processed_any = true;
+         continue;
+      }
+      
+      LogMessage(LOG_INFO, "[WEBHOOK] Command: OPEN " + action + " for " + sym);
+      SendOrderAdvanced(action, otype, sym, vol, price, sl, tp, comment, exp, "WEBHOOK");
+      CleanupFile(full, delete_flag);
+      processed_any = true;
+   }
+   
+   return processed_any;
 }
 
 void ProcessWebhookMode() {
    if(!g_webhook_readyFB) return;
-   if(g_webhook_instanceSub != "" && ProcessWebhookFile(g_webhook_instanceSub, Webhook_FilePattern, Webhook_DeleteAfterProcess)) return;
+   
+   // Add processing lock to prevent concurrent file access
+   if(g_webhook_processing_lock) {
+      LogMessage(LOG_DEBUG, "[WEBHOOK] Processing already in progress, skipping...");
+      return;
+   }
+   
+   g_webhook_processing_lock = true;
+   
+   if(g_webhook_instanceSub != "" && ProcessWebhookFile(g_webhook_instanceSub, Webhook_FilePattern, Webhook_DeleteAfterProcess)) {
+      g_webhook_processing_lock = false;
+      return;
+   }
    ProcessWebhookFile("", Webhook_FilePattern, Webhook_DeleteAfterProcess);
+   
+   g_webhook_processing_lock = false;
 }
 
 //==================== Slave Mode ====================
 bool ProcessSlaveFile(const string base, const string pattern, bool delete_flag) {
+   // Collect all files first (isolation strategy)
+   string files[];
+   int file_count = 0;
+   
    string mask = (base == "" ? pattern : base + "\\" + pattern);
    string found = "";
-   bool processed_any = false;
+   
    long h = FileFindFirst(mask, found, 0);
    if(h == INVALID_HANDLE) return false;
+   
+   // Collect all matching files
    do {
-      if(found == "") break;
-      string full = (base == "" ? found : base + "\\" + found);
-      string js;
-      if(!ReadAllText(full, js)) {
-         LogMessage(LOG_ERROR, "[SLAVE] Cannot read " + full);
-         // skip this file
-      } else {
-         // Parse JSON
-         string sym = GetVal(js, "broker_symbol");
-         if(sym == "") sym = GetVal(js, "symbol");
-         if(sym == "") sym = GetVal(js, "original_symbol");
-
-         string action = ToLower(GetVal(js, "action"));
-         if(action == "long") action = "buy";
-         if(action == "short") action = "sell";
-
-         string otype = ToLower(GetVal(js, "order_type"));
-         string comment = GetVal(js, "comment");
-         double vol = StringToDouble(GetVal(js, "volume"));
-         if(vol <= 0) vol = DefaultVolume;
-
-         string tp_s = GetVal(js, "tp");
-         if(tp_s == "") tp_s = GetVal(js, "take_profit");
-         string sl_s = GetVal(js, "sl");
-         if(sl_s == "") sl_s = GetVal(js, "stop_loss");
-         double tp = StringToDouble(tp_s);
-         double sl = StringToDouble(sl_s);
-         double price = StringToDouble(GetVal(js, "price"));
-         string exp = GetVal(js, "expire");
-
-         string cmdtype = ToLower(GetVal(js, "command_type"));
-         string close_by = ToLower(GetVal(js, "close_by"));
-         string index_s = GetVal(js, "index");
-         string ticket_s = GetVal(js, "ticket");
-         if(ticket_s == "") ticket_s = GetVal(js, "position_ticket");
-
-         // Close logic / modify logic handled in dedicated branch inside file-specific processors (existing logic)
-         // Reuse existing handlers by calling the same code path: we'll mimic the single-file body by reusing SendOrderAdvanced etc.
-
-         // --- Begin inlined logic (kept consistent with previous Process*File) ---
-         if(action == "close_symbol") {
-            CloseAllPositionsBySymbol(sym, "SLAVE");
-            CleanupFile(full, delete_flag);
-            processed_any = true;
-            continue;
-         } else if(action == "close" || cmdtype == "close_position") {
-            if(comment != "") {
-               ClosePositionByExactComment(comment, "SLAVE");
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            if(ticket_s != "") {
-               ulong tk = (ulong)StringToInteger(ticket_s);
-               ClosePositionByTicket(tk, "SLAVE");
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            int idx = (index_s != "" ? (int)StringToInteger(index_s) : 0);
-            if(idx > 0) {
-               ClosePositionByIndex(sym, idx, "SLAVE");
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            double reqVol = StringToDouble(GetVal(js, "volume"));
-            ClosePositionsByAmount(sym, reqVol, "SLAVE");
-            CleanupFile(full, delete_flag);
-            processed_any = true;
-            continue;
-         }
-
-         if(action == "modify" || cmdtype == "modify_position") {
-            double newTP = StringToDouble(GetVal(js, "tp"));
-            if(newTP == 0) newTP = StringToDouble(GetVal(js, "take_profit"));
-            double newSL = StringToDouble(GetVal(js, "sl"));
-            if(newSL == 0) newSL = StringToDouble(GetVal(js, "stop_loss"));
-
-            if(comment != "") {
-               ModifyPositionByExactComment(comment, newSL, newTP);
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            if(ticket_s != "") {
-               ulong tk2 = (ulong)StringToInteger(ticket_s);
-               ModifyPositionByTicket(tk2, newSL, newTP);
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            int idxm = (index_s != "" ? (int)StringToInteger(index_s) : 0);
-            if(idxm > 0) {
-               ModifyPositionByIndex(sym, idxm, newSL, newTP);
-               CleanupFile(full, delete_flag);
-               processed_any = true;
-               continue;
-            }
-            ModifyPositionsBySymbol(sym, newSL, newTP);
-            CleanupFile(full, delete_flag);
-            processed_any = true;
-            continue;
-         }
-
-         // Open orders (buy/sell)
-         if(action != "buy" && action != "sell") {
-            LogMessage(LOG_WARNING, "[SLAVE] Unknown action: " + action);
-            CleanupFile(full, delete_flag);
-            processed_any = true;
-            continue;
-         }
-         SendOrderAdvanced(action, otype, sym, vol, price, sl, tp, comment, exp, "SLAVE");
-         CleanupFile(full, delete_flag);
-         processed_any = true;
-         continue;
-         // --- End inlined logic ---
+      if(found != "" && found != "." && found != "..") {
+         ArrayResize(files, file_count + 1);
+         files[file_count] = (base == "" ? found : base + "\\" + found);
+         file_count++;
       }
    } while(FileFindNext(h, found));
    FileFindClose(h);
-   return processed_any;
+   
+   if(file_count == 0) return false;
+   
+   LogMessage(LOG_DEBUG, "[SLAVE] Found " + IntegerToString(file_count) + " files to process");
+   
+   // Process each file independently
+   bool processed_any = false;
+   for(int i = 0; i < file_count; i++) {
+      string full = files[i];
+      
+      // Check if file still exists
+      if(!FileIsExist(full)) {
+         LogMessage(LOG_DEBUG, "[SLAVE] File already processed: " + full);
+         continue;
+      }
+      
+      LogMessage(LOG_INFO, "[SLAVE] Processing file [" + IntegerToString(i+1) + "/" + IntegerToString(file_count) + "]: " + full);
+      
+      string js;
+      if(!ReadAllText(full, js)) {
+         LogMessage(LOG_ERROR, "[SLAVE] Cannot read " + full);
+         CleanupFile(full, delete_flag);
+         continue;
+      }
+      
+      if(js == "") {
+         LogMessage(LOG_WARNING, "[SLAVE] Empty file: " + full);
+         CleanupFile(full, delete_flag);
+         continue;
+      }
+      
+      LogMessage(LOG_DEBUG, "[SLAVE] File content: " + StringSubstr(js, 0, MathMin(200, (int)StringLen(js))));
+      
+      // Parse JSON
+      string sym = GetVal(js, "broker_symbol");
+      if(sym == "") sym = GetVal(js, "symbol");
+      if(sym == "") sym = GetVal(js, "original_symbol");
 
+      string action = ToLower(GetVal(js, "action"));
+      if(action == "long") action = "buy";
+      if(action == "short") action = "sell";
+
+      string otype = ToLower(GetVal(js, "order_type"));
+      string comment = GetVal(js, "comment");
+      double vol = StringToDouble(GetVal(js, "volume"));
+      if(vol <= 0) vol = DefaultVolume;
+
+      string tp_s = GetVal(js, "tp");
+      if(tp_s == "") tp_s = GetVal(js, "take_profit");
+      string sl_s = GetVal(js, "sl");
+      if(sl_s == "") sl_s = GetVal(js, "stop_loss");
+      double tp = StringToDouble(tp_s);
+      double sl = StringToDouble(sl_s);
+      double price = StringToDouble(GetVal(js, "price"));
+      string exp = GetVal(js, "expire");
+
+      string cmdtype = ToLower(GetVal(js, "command_type"));
+      string index_s = GetVal(js, "index");
+      string ticket_s = GetVal(js, "ticket");
+      if(ticket_s == "") ticket_s = GetVal(js, "position_ticket");
+      
+      LogMessage(LOG_INFO, "[SLAVE] Parsed: action=" + action + " sym=" + sym + " vol=" + DoubleToString(vol,2) + " comment=" + comment);
+
+      if(action == "close_symbol") {
+         LogMessage(LOG_INFO, "[SLAVE] Command: CLOSE_SYMBOL for " + sym);
+         CloseAllPositionsBySymbol(sym, "SLAVE");
+         CleanupFile(full, delete_flag);
+         processed_any = true;
+         continue;
+      } else if(action == "close" || cmdtype == "close_position") {
+         LogMessage(LOG_INFO, "[SLAVE] Command: CLOSE for " + sym);
+         
+         if(comment != "") {
+            ClosePositionByExactComment(comment, "SLAVE");
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         if(ticket_s != "") {
+            ulong tk = (ulong)StringToInteger(ticket_s);
+            ClosePositionByTicket(tk, "SLAVE");
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         int idx = (index_s != "" ? (int)StringToInteger(index_s) : 0);
+         if(idx > 0) {
+            ClosePositionByIndex(sym, idx, "SLAVE");
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         double reqVol = StringToDouble(GetVal(js, "volume"));
+         ClosePositionsByAmount(sym, reqVol, "SLAVE");
+         CleanupFile(full, delete_flag);
+         processed_any = true;
+         continue;
+      }
+
+      if(action == "modify" || cmdtype == "modify_position") {
+         LogMessage(LOG_INFO, "[SLAVE] Command: MODIFY for " + sym);
+         double newTP = StringToDouble(GetVal(js, "tp"));
+         if(newTP == 0) newTP = StringToDouble(GetVal(js, "take_profit"));
+         double newSL = StringToDouble(GetVal(js, "sl"));
+         if(newSL == 0) newSL = StringToDouble(GetVal(js, "stop_loss"));
+
+         if(comment != "") {
+            ModifyPositionByExactComment(comment, newSL, newTP);
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         if(ticket_s != "") {
+            ulong tk2 = (ulong)StringToInteger(ticket_s);
+            ModifyPositionByTicket(tk2, newSL, newTP);
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         int idxm = (index_s != "" ? (int)StringToInteger(index_s) : 0);
+         if(idxm > 0) {
+            ModifyPositionByIndex(sym, idxm, newSL, newTP);
+            CleanupFile(full, delete_flag);
+            processed_any = true;
+            continue;
+         }
+         ModifyPositionsBySymbol(sym, newSL, newTP);
+         CleanupFile(full, delete_flag);
+         processed_any = true;
+         continue;
+      }
+
+      if(action != "buy" && action != "sell") {
+         LogMessage(LOG_WARNING, "[SLAVE] Unknown action: " + action);
+         CleanupFile(full, delete_flag);
+         processed_any = true;
+         continue;
+      }
+      
+      LogMessage(LOG_INFO, "[SLAVE] Command: OPEN " + action + " for " + sym);
+      SendOrderAdvanced(action, otype, sym, vol, price, sl, tp, comment, exp, "SLAVE");
+      CleanupFile(full, delete_flag);
+      processed_any = true;
+   }
+   
+   return processed_any;
 }
 
 void ProcessSlaveMode() {
    if(!g_slave_readyFB) return;
-   if(g_slave_instanceSub != "" && ProcessSlaveFile(g_slave_instanceSub, Slave_FilePattern, Slave_DeleteAfterProcess)) return;
+   
+   // Add processing lock to prevent concurrent file access
+   if(g_slave_processing_lock) {
+      LogMessage(LOG_DEBUG, "[SLAVE] Processing already in progress, skipping...");
+      return;
+   }
+   
+   g_slave_processing_lock = true;
+   
+   if(g_slave_instanceSub != "" && ProcessSlaveFile(g_slave_instanceSub, Slave_FilePattern, Slave_DeleteAfterProcess)) {
+      g_slave_processing_lock = false;
+      return;
+   }
    ProcessSlaveFile("", Slave_FilePattern, Slave_DeleteAfterProcess);
+   
+   g_slave_processing_lock = false;
 }
 
 //==================== Master Mode ====================
@@ -975,13 +1161,10 @@ void InitMasterPositions() {
    LogMessage(LOG_INFO, "[MASTER] Initialized " + IntegerToString(total) + " existing positions");
 }
 
-//==================== Master Mode - Send Signal with Order ID ====================
 void SendSignal(string event, string symbol, int type, double volume, double tp, double sl, ulong master_ticket) {
    string url = Master_ServerURL + "/api/copy/trade";
 
    string typeStr = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-
-   // ✅ สร้าง Unique Order ID จาก Master Ticket
    string order_id = "order_" + IntegerToString((int)master_ticket);
 
    string json = "{";
@@ -991,7 +1174,7 @@ void SendSignal(string event, string symbol, int type, double volume, double tp,
    json += "\"type\":\"" + typeStr + "\",";
    json += "\"symbol\":\"" + symbol + "\",";
    json += "\"volume\":" + DoubleToString(volume, 2);
-   json += ",\"order_id\":\"" + order_id + "\"";  // ✅ เพิ่ม order_id
+   json += ",\"order_id\":\"" + order_id + "\"";
 
    if(tp > 0) json += ",\"tp\":" + DoubleToString(tp, _Digits);
    if(sl > 0) json += ",\"sl\":" + DoubleToString(sl, _Digits);
@@ -1020,12 +1203,10 @@ void SendSignal(string event, string symbol, int type, double volume, double tp,
    }
 }
 
-
 void CheckMasterPositions() {
    int currentTotal = PositionsTotal();
    int previousTotal = ArraySize(MasterTickets);
 
-   // =================== Check for NEW positions (OPEN) ===================
    for(int i = 0; i < currentTotal; i++) {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
@@ -1048,10 +1229,8 @@ void CheckMasterPositions() {
          double tp = PositionGetDouble(POSITION_TP);
          double sl = PositionGetDouble(POSITION_SL);
 
-         // ✅ ส่ง ticket ไปด้วย
          SendSignal("deal_add", symbol, type, volume, tp, sl, ticket);
 
-         // Save to tracking arrays
          ArrayResize(MasterTickets, previousTotal + 1);
          ArrayResize(MasterSymbols, previousTotal + 1);
          ArrayResize(MasterTypes, previousTotal + 1);
@@ -1066,9 +1245,8 @@ void CheckMasterPositions() {
          MasterTPs[previousTotal] = tp;
          MasterSLs[previousTotal] = sl;
 
-         previousTotal++; // ✅ เพิ่ม previousTotal สำหรับรอบถัดไป
+         previousTotal++;
       } 
-      // =================== Check for MODIFIED positions ===================
       else if(!isNew && posIndex >= 0) {
          double currentTP = PositionGetDouble(POSITION_TP);
          double currentSL = PositionGetDouble(POSITION_SL);
@@ -1079,7 +1257,6 @@ void CheckMasterPositions() {
             int type = (int)PositionGetInteger(POSITION_TYPE);
             double volume = PositionGetDouble(POSITION_VOLUME);
 
-            // ✅ ส่ง ticket ไปด้วย
             SendSignal("position_modify", symbol, type, volume, currentTP, currentSL, ticket);
 
             MasterTPs[posIndex] = currentTP;
@@ -1088,7 +1265,6 @@ void CheckMasterPositions() {
       }
    }
 
-   // =================== Check for CLOSED positions ===================
    if(Master_SendOnClose && currentTotal < previousTotal) {
       for(int i = 0; i < previousTotal; i++) {
          ulong oldTicket = MasterTickets[i];
@@ -1102,12 +1278,10 @@ void CheckMasterPositions() {
          }
 
          if(!stillExists) {
-            // ✅ ส่ง oldTicket ที่ถูกปิด
             SendSignal("deal_close", MasterSymbols[i], MasterTypes[i], MasterVolumes[i], 0, 0, oldTicket);
          }
       }
 
-      // =================== Update tracking arrays ===================
       ulong tempTickets[];
       string tempSymbols[];
       int tempTypes[];
@@ -1153,7 +1327,6 @@ void CheckMasterPositions() {
       }
    }
 }
-
 
 //==================== File Bridge Setup ====================
 bool SetupFileBridge(string instanceRootPath, bool autoLink, string &instanceSub, bool &readyFB, bool &directMode, string mode_name) {
@@ -1230,34 +1403,32 @@ int OnInit() {
    AccountNumber = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
    g_magic = (MagicNumberInput > 0 ? MagicNumberInput : ComputeAutoMagic());
    
-   LogMessage(LOG_INFO, "=== All-in-One Trading EA v2.0 Started ===");
+   LogMessage(LOG_INFO, "=== All-in-One Trading EA v2.2 Started ===");
    LogMessage(LOG_INFO, "Account: " + AccountNumber);
    LogMessage(LOG_INFO, "Magic: " + IntegerToString(g_magic));
    
-   // Check if at least one mode is enabled
    if(!EnableWebhook && !EnableMaster && !EnableSlave) {
       Alert("?? Please enable at least one mode!");
       LogMessage(LOG_ERROR, "No mode enabled");
       return(INIT_PARAMETERS_INCORRECT);
    }
    
-   // Display enabled modes
    string modes = "";
    if(EnableWebhook) modes += "WEBHOOK ";
    if(EnableMaster) modes += "MASTER ";
    if(EnableSlave) modes += "SLAVE ";
    LogMessage(LOG_INFO, "Enabled Modes: " + modes);
    
-   // Setup Webhook Mode
    if(EnableWebhook) {
       LogMessage(LOG_INFO, "=== Initializing Webhook Mode ===");
+      LogMessage(LOG_INFO, "WebhookAutoCloseBySymbol: " + (WebhookAutoCloseBySymbol ? "TRUE" : "FALSE"));
+      LogMessage(LOG_INFO, "WebhookCloseOppositeBeforeOpen: " + (WebhookCloseOppositeBeforeOpen ? "TRUE" : "FALSE"));
       SetupFileBridge(Webhook_InstanceRootPath, Webhook_AutoLinkInstance, 
                      g_webhook_instanceSub, g_webhook_readyFB, g_webhook_directMode, "WEBHOOK");
       LogMessage(LOG_INFO, "Webhook polling: " + IntegerToString(Webhook_PollingSeconds) + " seconds");
       LogMessage(LOG_INFO, "Webhook pattern: " + Webhook_FilePattern);
    }
    
-   // Setup Master Mode
    if(EnableMaster) {
       LogMessage(LOG_INFO, "=== Initializing Master Mode ===");
       
@@ -1278,7 +1449,6 @@ int OnInit() {
       InitMasterPositions();
    }
    
-   // Setup Slave Mode
    if(EnableSlave) {
       LogMessage(LOG_INFO, "=== Initializing Slave Mode ===");
       SetupFileBridge(Slave_InstanceRootPath, Slave_AutoLinkInstance,
@@ -1289,7 +1459,6 @@ int OnInit() {
    
    Initialized = true;
    
-   // Set timer (use minimum polling interval)
    int timer_seconds = 999;
    if(EnableWebhook) timer_seconds = MathMin(timer_seconds, Webhook_PollingSeconds);
    if(EnableSlave) timer_seconds = MathMin(timer_seconds, Slave_PollingSeconds);
@@ -1311,7 +1480,6 @@ void OnDeinit(const int reason) {
 void OnTimer() {
    if(!Initialized) return;
    
-   // Process each enabled mode
    if(EnableWebhook) {
       ProcessWebhookMode();
    }
