@@ -17,10 +17,9 @@ A sophisticated web application designed to receive webhook signals from platfor
 
 ### Installation Steps
 1. Install Python 3.8+ (check "Add Python to PATH")
-2. Install dependencies: `pip install -r requirements.txt`
-3. Run setup: `python setup.py`
-4. Configure MT5 profile (save as "Default")
-5. Start bot: `python server.py`
+2. Run setup: `python setup.py`
+3. Configure MT5 profile (save as "Default")
+4. Start bot: `python server.py`
 
 ### Enable External Access
 1. Install cloudflared
@@ -30,99 +29,180 @@ A sophisticated web application designed to receive webhook signals from platfor
 
 ## System Architecture
 
-### System Flow Diagram
+### Complete System Overview
 
 ```
-┌────────────────────┐        ┌─────────────────────┐        ┌────────────────────────┐
-│ Signal Sources     │  POST  │  Flask Server & UI  │        │ Session Manager        │
-│ (TradingView, etc) ├───────>│  /webhook/{TOKEN}   ├───────>│ + MT5 Handler          │
-└────────────────────┘        └──────────┬──────────┘        └───────────┬────────────┘
-                                          │                               │
-                         File-bridge JSON │                               │ Launch/Track MT5
-                                          v                               v
-                              <InstanceRootPath>\              MT5 Instance(s)
-                              <Account>\MQL5\Files\    ┌──>    EA (All-in-One)
-                                                       │
-                                                       └──>    Symbol Mapper (server-side)
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                     MT5 MULTI-ACCOUNT TRADING BOT SYSTEM                                           │
+│                                          (Webhook + Copy Trading)                                                  │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────┐                                                          ┌──────────────────────────────────┐
+│   SIGNAL SOURCES     │                                                          │     SERVER COMPONENTS            │
+│                      │                                                          │  (project-root/)                 │
+│  • TradingView       │                 POST /webhook/{TOKEN}                    │                                  │
+│  • Pine Script       │────────────────────────────────────────────────────────> │  server.py                       │
+│  • Custom Bots       │                 JSON Payload                             │  ├─ app/                         │
+│  • Manual Trading    │                                                          │  │  ├─ session_manager.py         │
+└──────────────────────┘                                                          │  │  ├─ symbol_mapper.py           │
+                                                                                  │  │  ├─ email_handler.py           │
+                                                                                  │  │  ├─ trades.py                  │
+                        ┌─────────────────────────────────────────────┐          │  │  └─ copy_trading/              │
+                        │         FLASK SERVER (localhost:5000)       │          │  │      ├─ copy_manager.py        │
+                        │  ┌───────────────────────────────────────┐  │          │  │      ├─ copy_handler.py        │
+                        │  │  1. Authentication                     │  │          │  │      ├─ copy_executor.py       │
+                        │  │     • Basic Auth (username/password)   │  │          │  │      ├─ copy_history.py        │
+                        │  │     • API Key validation               │  │          │  │      └─ balance_helper.py      │
+                        │  │  2. Rate Limiting                      │  │          │  ├─ static/                       │
+                        │  │     • 10 req/min (Webhook)            │  │          │  │  ├─ index.html                 │
+                        │  │     • 20 req/min (API)                │  │          │  │  ├─ style.css                  │
+                        │  │  3. Symbol Mapping                     │  │          │  │  └─ app.js                     │
+                        │  │     • XAUUSDM → XAUUSD                │  │          │  ├─ data/                         │
+                        │  │     • Fuzzy matching                   │  │          │  │  ├─ accounts.db                │
+                        │  └───────────────────────────────────────┘  │          │  │  ├─ custom_mappings.json       │
+                        └──────────────┬──────────────────────────────┘          │  │  ├─ copy_pairs.json (v2.0)     │
+                                       │                                         │  │  └─ copy_history.json (v2.0)   │
+                                       │                                         │  ├─ logs/                          │
+                ┌──────────────────────┼──────────────────────┐                 │  │  └─ trading_bot.log             │
+                │                      │                      │                 │  ├─ mt5_instances/                 │
+                ▼                      ▼                      ▼                 │  ├─ backup/                        │
+    ┌───────────────────┐  ┌────────────────────┐  ┌──────────────────┐       │  └─ .env                           │
+    │ WEBHOOK HANDLER   │  │  COPY TRADING      │  │  EMAIL HANDLER   │       └──────────────────────────────────┘
+    │ (TradingView)     │  │  (Master/Slave)    │  │  (Notifications) │
+    │                   │  │                    │  │                  │
+    │ Process:          │  │ Process:           │  │ Send Alerts:     │       ┌──────────────────────────────────┐
+    │ • Parse JSON      │  │ • Validate API key │  │ • Startup        │       │   MT5 INSTANCE STRUCTURE         │
+    │ • Validate fields │  │ • Find pairs       │  │ • Online/Offline │       │  (<InstanceRootPath>\<Account>\) │
+    │ • Check account   │  │ • Map symbol       │  │ • Errors         │       │                                  │
+    └─────────┬─────────┘  └──────────┬─────────┘  └──────────────────┘       │  <AccountNumber>\                │
+              │                       │                                        │  ├─ terminal64.exe                │
+              │                       │                                        │  ├─ MQL5\                         │
+              ▼                       ▼                                        │  │  ├─ Experts\                    │
+    webhook_command_*.json    slave_command_*.json                            │  │  │  └─ (All-in-One).mq5        │
+              │                       │                                        │  │  └─ Files\                      │
+              │                       │                                        │  │      ├─ webhook_command_*.json │
+              └───────────────────────┼────────────────────────────────>      │  │      ├─ slave_command_*.json   │
+                                      │                                        │  │      └─ instance_<Account>\    │
+                                      ▼                                        │  └─ Data\ (Don't write here!)     │
+              <InstanceRootPath>\<Account>\MQL5\Files\                         └──────────────────────────────────┘
+                                      │
+                                      │
+                                      ▼
+              ┌───────────────────────────────────────────────────┐
+              │         MT5 INSTANCE (All-in-One EA v2.2)         │           ┌──────────────────────────────────┐
+              │  ┌─────────────────────────────────────────────┐  │           │      EA MODES & ACTIONS          │
+              │  │  MODE 1: WEBHOOK                            │  │           │                                  │
+              │  │  • Poll: webhook_command_*.json (1-3 sec)   │  │           │  WEBHOOK MODE:                   │
+              │  │  • Actions: BUY/SELL/CLOSE/CLOSE_ALL        │  │           │  ✓ Read JSON from Files\         │
+              │  │  • Execute: Market/Limit/Stop orders        │  │           │  ✓ Parse action & parameters     │
+              │  │  • Delete: File after processing            │  │           │  ✓ Execute trades                │
+              │  └─────────────────────────────────────────────┘  │           │  ✓ Delete processed files        │
+              │                                                   │           │                                  │
+              │  ┌─────────────────────────────────────────────┐  │           │  MASTER MODE:                    │
+              │  │  MODE 2: MASTER                             │  │           │  ✓ Monitor account positions     │
+              │  │  • Send: POST /api/copy/trade               │  │           │  ✓ Detect: Open/Close/Modify     │
+              │  │  • Events: OnOpen/OnClose/OnModify          │  │           │  ✓ Generate unique order_id      │
+              │  │  • Auth: API Key from copy pair             │  │           │  ✓ POST to server with API key   │
+              │  │  • Data: Symbol, Volume, TP, SL, order_id   │  │           │                                  │
+              │  └─────────────────────────────────────────────┘  │           │  SLAVE MODE:                     │
+              │                                                   │           │  ✓ Read JSON from Files\         │
+              │  ┌─────────────────────────────────────────────┐  │           │  ✓ Execute copy trades           │
+              │  │  MODE 3: SLAVE                              │  │           │  ✓ Apply volume calculations     │
+              │  │  • Poll: slave_command_*.json (1-3 sec)     │  │           │  ✓ Set comment: COPY_order_xxx   │
+              │  │  • Actions: BUY/SELL/CLOSE                  │  │           │  ✓ Delete processed files        │
+              │  │  • Volume: Fixed/Multiply/Percent mode      │  │           └──────────────────────────────────┘
+              │  │  • Comment: COPY_order_12345                │  │
+              │  │  • Delete: File after processing            │  │
+              │  └─────────────────────────────────────────────┘  │
+              │                                                   │
+              │      All modes can run simultaneously             │
+              └───────────────────────────────────────────────────┘
+
+
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                           DATA FLOW EXAMPLES                                                       │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐    ┌──────────────────────────────────────────────────┐
+│  FLOW 1: WEBHOOK TRADING (TradingView → MT5)            │    │  FLOW 2: COPY TRADING (Master → Slave)           │
+│                                                          │    │                                                   │
+│  [1] TradingView Alert Triggered                        │    │  [1] Master Account Opens Position               │
+│      └─> POST /webhook/abc123xyz                        │    │      └─> BUY EURUSD 1.0 lot                      │
+│          {"action":"BUY","symbol":"XAUUSD",             │    │                                                   │
+│           "volume":0.01,"tp":2450,"sl":2400}            │    │  [2] Master EA Detects Position                  │
+│                                                          │    │      └─> POST /api/copy/trade                    │
+│  [2] Flask Server Processes                             │    │          {"api_key":"xxx","event":"deal_add",    │
+│      ✓ Token valid                                      │    │           "symbol":"EURUSD","volume":1.0,        │
+│      ✓ Rate limit OK                                    │    │           "order_id":"order_12345"}              │
+│      ✓ JSON parsed                                      │    │                                                   │
+│                                                          │    │  [3] Copy Handler Processes                      │
+│  [3] Symbol Mapper Converts                             │    │      ✓ API key valid                             │
+│      └─> XAUUSD found in Market Watch                   │    │      ✓ Found 2 active pairs                      │
+│                                                          │    │      ✓ Symbol: EURUSD → EURUSD (no change)      │
+│  [4] Session Manager Checks                             │    │                                                   │
+│      ✓ Account 12345 exists                             │    │  [4] Volume Calculator                           │
+│      ✓ MT5 instance online                              │    │      • Slave 1 (Fixed): 1.0 → 0.01 lot          │
+│                                                          │    │      • Slave 2 (Multiply): 1.0 × 0.5 = 0.5 lot  │
+│  [5] File Writer Creates                                │    │                                                   │
+│      └─> C:\MT5_Instances\12345\MQL5\Files\             │    │  [5] File Writer Creates (per slave)             │
+│          webhook_command_1234567890.json                │    │      └─> C:\MT5_Instances\67890\MQL5\Files\      │
+│                                                          │    │          slave_command_1234567890.json           │
+│  [6] MT5 EA (Webhook Mode)                              │    │                                                   │
+│      • Detects new file                                 │    │  [6] Slave EA (Slave Mode)                       │
+│      • Reads JSON                                       │    │      • Detects new file                          │
+│      • Executes: BUY XAUUSD 0.01 lot                    │    │      • Reads JSON                                │
+│      • Deletes file                                     │    │      • Executes: BUY EURUSD 0.01 lot             │
+│                                                          │    │      • Comment: COPY_order_12345                 │
+│  [7] Email Alert Sent                                   │    │      • Deletes file                              │
+│      └─> "✓ Position opened: BUY XAUUSD 0.01"          │    │                                                   │
+│                                                          │    │  [7] Copy History Updated                        │
+│  [8] Response to TradingView                            │    │      └─> SSE broadcast to Web UI                 │
+│      └─> 200 OK                                         │    │          Status: Success                         │
+└─────────────────────────────────────────────────────────┘    └──────────────────────────────────────────────────┘
+
+
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                     VOLUME CALCULATION MODES (Copy Trading)                                        │
+├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  MODE 1: FIXED                                                                                                     │
+│  Formula: Slave volume = Fixed value (ignore master volume)                                                       │
+│  Example: Master 1.0 lot → Slave always 0.01 lot                                                                  │
+│           Master 2.0 lot → Slave always 0.01 lot                                                                  │
+│                                                                                                                    │
+│  MODE 2: MULTIPLY                                                                                                  │
+│  Formula: Slave volume = Master volume × Multiplier                                                               │
+│  Example: Master 1.0 lot × 0.5 = Slave 0.5 lot                                                                    │
+│           Master 2.0 lot × 0.5 = Slave 1.0 lot                                                                    │
+│                                                                                                                    │
+│  MODE 3: PERCENT (Balance-Based)                                                                                  │
+│  Formula: Slave volume = (Slave Balance / Master Balance) × Master Volume × Multiplier                           │
+│  Example: Master $10,000 balance, 1.0 lot                                                                         │
+│           Slave $5,000 balance                                                                                    │
+│           Result: (5000/10000) × 1.0 × 2.0 = 1.0 lot                                                              │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Working Modes
+### File Patterns Reference
 
-**FILE_BRIDGE (Recommended)**
-- Server writes JSON to `...\<Account>\MQL5\Files\...`
-- EA polls and processes commands
-- More stable for multiple instances
-
-**WEBHOOK_POST (Alternative)**
-- EA calls `WebhookURL` at intervals
-- Processes JSON response immediately
-- Faster but requires EA configuration
-
-### Data Flow Sequence
-
+**Webhook Commands** (TradingView → MT5)
 ```
-1. TradingView Alert
-   ↓ POST webhook with JSON payload
-   
-2. Flask Server
-   ↓ Token validation, JSON parsing, rate limiting
-   
-3. Symbol Mapper
-   ↓ Normalize symbol (e.g., "XAUUSDM" → "XAUUSD")
-   
-4. Session Manager
-   ↓ Verify account exists and is online
-   
-5. MT5 Handler
-   ↓ Write JSON command to: <InstanceRootPath>\<Account>\MQL5\Files\webhook_command_[timestamp].json
-   
-6. MT5 Expert Advisor
-   ↓ Read JSON, execute trade, delete file
-   
-7. Email Handler
-   ↓ Send trade confirmation or error alert
-   
-8. Response
-   → 200 OK or error message to TradingView
+webhook_command_1234567890.json
+webhook_command_1234567891.json
+webhook_command_*.json  ← EA polls this pattern
 ```
 
-### Project Structure
-
-**Server Side**
+**Slave Commands** (Master → Slave via Copy Trading)
 ```
-project-root/
-├─ server.py                    # Main Flask app: routes, auth, rate-limit, health, monitor thread
-├─ app/
-│  ├─ __init__.py
-│  ├─ session_manager.py        # Manage MT5 instances (start/stop/restart/focus, path, status)
-│  ├─ symbol_mapper.py          # Map symbols from payload to actual MT5 symbol names
-│  ├─ email_handler.py          # Email notifications (startup, online/offline, errors)
-│  └─ trades.py                 # Record/read History Log + SSE /events/trades + /trades/clear
-├─ static/                      # Serve UI files (client-side) via Flask
-│  ├─ index.html                # Main UI page
-│  ├─ style.css                 # Styles
-│  └─ app.js                    # Client-side logic + SSE history
-├─ mt5_instances/               # MT5 instance folders
-├─ logs/
-│  └─ trading_bot.log           # Server log file from server.py
-├─ data/                        # Database and mappings
-├─ backup/                      # Backup storage
-├─ .env                         # Configuration (SECRET_KEY, BASIC_USER/PASS, WEBHOOK_TOKEN, SMTP, etc.)
-├─ requirements.txt             # Python dependencies
-└─ README.md
+slave_command_1234567890.json
+slave_command_1234567891.json
+slave_command_*.json  ← EA polls this pattern
 ```
 
-**MT5 Instance Side**
-```
-<InstanceRootPath>\
-  └─ <AccountNumber>\
-       └─ MQL5\
-            └─ Files\
-                ├─ webhook_command_17590xxxxx.json        ← Command files
-                └─ instance_<AccountNumber>\              ← Junction by EA (if not Direct Mode)
-```
-
-**Important**: Write files to `...\<Account>\MQL5\Files\` only — DO NOT write to `...\Data\...` folder
+**Important Notes:**
+-  Files are written to: `<InstanceRootPath>\<Account>\MQL5\Files\`
+-  DO NOT write to: `<InstanceRootPath>\<Account>\Data\`
+-  Polling interval: 1-3 seconds (configurable in EA)
+-  Files are auto-deleted after processing
 
 ### JSON Command Structure
 
@@ -173,11 +253,11 @@ project-root/
 ## Requirements
 
 ### System Requirements
-- **OS**: Windows 10/11 (64-bit)
-- **Python**: 3.8+
+- **OS**: Windows 10/11 (64-bit) - [Download Windows 11](https://www.microsoft.com/software-download/windows11)
+- **Python**: 3.8+ - [Download Python](https://www.python.org/downloads/)
 - **RAM**: 4GB minimum (8GB+ for multiple instances)
 - **Disk Space**: 500MB per MT5 instance
-- **MetaTrader 5**: Installed and configured
+- **MetaTrader 5**: Installed and configured - [Download MT5](https://www.metatrader5.com/en/download)
 
 ### Python Dependencies
 ```
@@ -197,137 +277,116 @@ werkzeug==2.3.7
 Download Python 3.8+ from [python.org](https://www.python.org/downloads/)
 - Check "Add Python to PATH" during installation
 
-### Step 2: Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### Step 3: Run Setup Wizard
+### Step 2: Run Setup Wizard
 ```bash
 python setup.py
 ```
 
 **The wizard will:**
 - Check system requirements
+- Install dependencies automatically
 - Create directory structure
 - Configure profile source
 - Generate security credentials
 - Setup email notifications (optional)
 
-### Step 4: Prepare MT5 Profile
+### Step 3: Prepare MT5 Profile
 1. Open your main MT5 installation
-2. Configure settings (charts, templates, EAs, indicators)
-3. Save as "Default" profile: **File → Profiles → Save As... → "Default"**
+2. Login and configure your profile as desired
+3. Navigate to: `File → Open Data Folder`
+4. Copy the full path
+5. Paste path into setup wizard when prompted
+6. Save profile as "Default"
+
+### Step 4: Install Expert Advisor
+1. Copy `ea/(All-in-One).mq5` to `MT5/MQL5/Experts/`
+2. Open MetaEditor
+3. Compile the EA
+4. Restart MT5
 
 ---
 
 ## Configuration
 
-### Basic Configuration (.env)
+### Environment Variables (.env)
 
 ```env
-# ============================================
-# AUTHENTICATION
-# ============================================
+# Server Configuration
+SECRET_KEY=your-secret-key-here
 BASIC_USER=admin
-BASIC_PASS=your_secure_password
+BASIC_PASS=your-secure-password
 
-# ============================================
-# SECURITY
-# ============================================
-SECRET_KEY=auto_generated_key
-WEBHOOK_TOKEN=auto_generated_token
+# Webhook Configuration
+WEBHOOK_TOKEN=your-webhook-token-here
 EXTERNAL_BASE_URL=http://localhost:5000
 
-# ============================================
-# SERVER
-# ============================================
-PORT=5000
-DEBUG=False
+# Email Notifications (Optional)
+SMTP_SERVER=smtp.gmail.com
+SMTP_PORT=587
+EMAIL_USER=your-email@gmail.com
+EMAIL_PASS=your-app-password
+ALERT_EMAIL=alerts@example.com
 
-# ============================================
-# MT5 CONFIGURATION
-# ============================================
-MT5_MAIN_PATH=C:\Program Files\MetaTrader 5\terminal64.exe
-MT5_INSTANCES_DIR=mt5_instances
-TRADING_METHOD=file
+# Rate Limiting
+WEBHOOK_RATE_LIMIT=10 per minute
+API_RATE_LIMIT=20 per minute
 
-# ============================================
-# EMAIL (OPTIONAL)
-# ============================================
-EMAIL_ENABLED=True
-SENDER_EMAIL=your.email@gmail.com
-SENDER_PASSWORD=your_app_password
-RECIPIENTS=alert1@gmail.com,alert2@gmail.com
-
-# ============================================
-# SYMBOL MAPPING
-# ============================================
-SYMBOL_FETCH_ENABLED=False
-FUZZY_MATCH_THRESHOLD=0.6
-
-# ============================================
-# RATE LIMITING
-# ============================================
-RATE_LIMIT_WEBHOOK=10 per minute
-RATE_LIMIT_API=100 per hour
+# Instance Configuration
+INSTANCE_ROOT_PATH=C:\MT5_Instances
+MT5_PROFILE_SOURCE=C:\Users\YourName\AppData\Roaming\MetaQuotes\Terminal\XXXXXXXX\profiles\Default
 ```
 
-### Gmail Email Setup
+### Rate Limiting Configuration
 
-1. Enable 2-Factor Authentication
-2. Generate App Password:
-   - Go to: Google Account → Security → 2-Step Verification → App passwords
-3. Use generated password in `SENDER_PASSWORD`
+Rate limits can be configured in `.env`:
+- `WEBHOOK_RATE_LIMIT`: Requests per minute for webhook endpoint (default: 10)
+- `API_RATE_LIMIT`: Requests per minute for API endpoints (default: 20)
+
+Changes require server restart to take effect.
 
 ---
 
 ## External Access (Cloudflare Tunnel)
 
-### Quick Setup (4 Steps)
+### Install Cloudflared
 
-#### 1. Install Cloudflared
+**Download:**
+- Windows: [https://github.com/cloudflare/cloudflared/releases](https://github.com/cloudflare/cloudflared/releases)
 
-**Windows (PowerShell as Administrator):**
+**Install:**
 ```powershell
-winget install --id Cloudflare.cloudflared
+# Move to Program Files
+move cloudflared.exe "C:\Program Files\cloudflared\"
+
+# Add to PATH
+$env:Path += ";C:\Program Files\cloudflared"
 ```
-Or download from: https://github.com/cloudflare/cloudflared/releases
 
-#### 2. Login & Create Tunnel
+### Setup Tunnel
 
+**Login:**
 ```powershell
-# Login
 cloudflared tunnel login
+```
 
-# Create tunnel
+**Create Tunnel:**
+```powershell
 cloudflared tunnel create mt5-bot
 ```
-Save the Tunnel ID from output
 
-#### 3. Create Config File
-
-Create file: `C:\Users\<Username>\.cloudflared\config.yml`
-
+**Configure (config.yml):**
 ```yaml
+url: http://localhost:5000
 tunnel: YOUR_TUNNEL_ID
-credentials-file: C:\Users\<Username>\.cloudflared\YOUR_TUNNEL_ID.json
+credentials-file: C:\Users\YourName\.cloudflared\YOUR_TUNNEL_ID.json
 
 ingress:
-  - hostname: webhook.yourdomain.com
-    service: http://127.0.0.1:5000
-    
-  - hostname: yourdomain.com
-    service: http://127.0.0.1:5000
-    
+  - hostname: trading.yourdomain.com
+    service: http://localhost:5000
   - service: http_status:404
 ```
 
-**Replace:**
-- `YOUR_TUNNEL_ID` = Tunnel ID from step 2
-- `webhook.yourdomain.com` and `yourdomain.com` = your domain
-
-#### 4. Setup DNS & Run
+### Setup DNS & Run
 
 **Configure DNS (choose one):**
 
@@ -422,159 +481,47 @@ python server.py
 1. Create Alert in TradingView
 2. Enable "Webhook URL"
 3. Paste: `https://trading.yourdomain.com/webhook/YOUR_TOKEN`
-4. Set alert message (JSON format)
+4. Configure alert message (JSON format)
 
-### Webhook Payload Examples
+### JSON Payload Examples
 
-#### Market Order (Single Account)
+**Open BUY Position:**
 ```json
 {
-  "account_number": "1123456",
-  "symbol": "XAUUSD",
   "action": "BUY",
+  "symbol": "XAUUSD",
   "volume": 0.01,
   "take_profit": 2450.0,
   "stop_loss": 2400.0
 }
 ```
 
-#### Multiple Accounts
+**Close All Positions:**
 ```json
 {
-  "accounts": ["1123456", "7891011"],
-  "symbol": "EURUSD",
-  "action": "SELL",
-  "volume": 0.1
+  "action": "CLOSE_ALL"
 }
 ```
 
-#### Using TradingView Variables
+**Close Symbol Positions:**
 ```json
 {
-  "account_number": "1123456",
-  "symbol": "{{ticker}}",
-  "action": "{{strategy.order.comment}}",
-  "volume": 0.05
-}
-```
-
-#### Limit Order
-```json
-{
-  "account_number": "1123456",
-  "symbol": "EURUSD",
-  "action": "BUY",
-  "order_type": "limit",
-  "price": 1.0850,
-  "volume": 0.1
-}
-```
-
-#### Close Positions
-
-**Close specific position:**
-```json
-{
-  "account_number": "1123456",
-  "action": "CLOSE",
-  "ticket": 123456789
-}
-```
-
-**Close all positions for symbol:**
-```json
-{
-  "account_number": "1123456",
   "action": "CLOSE_SYMBOL",
   "symbol": "XAUUSD"
 }
 ```
 
-**Close all positions:**
-```json
-{
-  "account_number": "1123456",
-  "action": "CLOSE_ALL"
-}
-```
+### Test Webhook
 
-### Available Actions
-
-| Action | Description |
-|--------|-------------|
-| `BUY` / `LONG` | Open buy position |
-| `SELL` / `SHORT` | Open sell position |
-| `CLOSE` | Close specific position |
-| `CLOSE_SYMBOL` | Close all positions for symbol |
-| `CLOSE_ALL` | Close all open positions |
-
-### Symbol Mapping
-
-**Automatic Mappings:**
-- `XAUUSDM` → `XAUUSD`
-- `GOLD` → `XAUUSD`
-- `EURUSD.` → `EURUSD`
-
-**Custom Mappings** (`data/custom_mappings.json`):
-```json
-{
-  "goldspot": "XAUUSD",
-  "btc": "BTCUSD",
-  "sp500": "US500"
-}
-```
-
-
-## Troubleshooting
-
-### MT5 Instance Won't Start
-
-**Solutions:**
-- Check `MT5_MAIN_PATH` in `.env`
-- Manually run: `mt5_instances/[account]/launch_mt5_[account].bat`
-- Check logs: `logs/trading_bot.log`
-
-### Webhook Returns 401
-
-**Solutions:**
-- Verify webhook token matches `.env`
-- Copy webhook URL from web interface
-
-### Symbol Not Found
-
-**Solutions:**
-- Add custom mapping in `data/custom_mappings.json`
-- Check symbol exists in MT5 Market Watch
-
-### Email Not Working
-
-**Solutions:**
-- For Gmail: Use App Password, not regular password
-- Verify SMTP settings in `.env`
-- Check if email alerts are being filtered (localhost/health-check requests won't trigger emails)
-
-### Cloudflare Tunnel Down
-
-```bash
-# Check service
-sc query cloudflared
-
-# Restart
-net stop cloudflared
-net start cloudflared
-```
-
-
-## Testing
-
-### Test Webhook Locally
+**Test via Local:**
 
 ```powershell
 $body = @{
-    account_number = "1123456"
-    symbol = "XAUUSD"
     action = "BUY"
+    symbol = "XAUUSD"
     volume = 0.01
+    take_profit = 2450.0
+    stop_loss = 2400.0
 } | ConvertTo-Json
 
 Invoke-WebRequest -Uri "http://localhost:5000/webhook/YOUR_TOKEN" `
@@ -655,6 +602,7 @@ Email system filters out Basic Auth failures from localhost/health-checks to pre
 .env
 data/accounts.db
 data/custom_mappings.json
+data/copy_pairs.json
 config.yml (if using Cloudflare)
 .cloudflared/ (if using Cloudflare)
 logs/trading_bot.log
@@ -699,3 +647,297 @@ echo Backup completed: %BACKUP_DIR%
 **Compatible**: MT5 Build 3801+, Python 3.8+, Windows 10/11
 
 **Remember**: Discipline, risk management, and continuous learning are keys to successful trading. Use this tool wisely.
+
+---
+---
+
+#  Update 2.0 - Copy Trading System (October 24, 2025)
+
+### Overview
+
+Version 2.0 introduces **Master-Slave Copy Trading** that automatically replicates trades from Master accounts to multiple Slave accounts in real-time.
+
+---
+
+###  Key Features
+
+#### 1. Master-Slave Architecture
+
+- **Master Account**: Sends trading signals to server via HTTP API with unique API key
+- **Slave Account**: Receives and executes commands via JSON file bridge
+- **Real-time Tracking**: Order ID system ensures precise position matching
+
+#### 2. Volume Management Modes
+
+**Fixed Mode**: Slave always trades fixed lot size
+```
+Master 1.0 lot → Slave 0.01 lot (always)
+```
+
+**Multiply Mode**: Slave volume = Master volume × Multiplier
+```
+Master 1.0 lot × 2 = Slave 2.0 lots
+```
+
+**Percent Mode**: Balance-based calculation
+```
+Slave volume = (Slave Balance / Master Balance) × Master Volume × Multiplier
+Example: (5000/10000) × 1.0 × 2 = 1.0 lot
+```
+
+#### 3. Intelligent Symbol Mapping
+
+- Auto-converts symbols between different brokers (XAUUSD → GOLD)
+- Fuzzy matching finds closest symbol when exact match unavailable
+- Custom mappings via UI
+
+#### 4. Selective TP/SL Copying
+
+- **Enabled**: Slave copies exact TP/SL from Master
+- **Disabled**: Slave uses EA defaults or no TP/SL
+- Useful for different risk management per account
+
+#### 5. Position Tracking
+
+Each position tracked via unique Order ID in comment: `COPY_order_12345`
+
+#### 6. Real-Time History
+
+- Live event log via Server-Sent Events
+- Filter by Success/Error
+- Shows Master/Slave, Action, Symbol, Volume, Timestamp
+
+---
+
+###  Technical Details
+
+#### New API Endpoints
+```
+POST   /api/copy/trade              # Master EA sends signals
+GET    /api/copy/pairs              # List copy pairs
+POST   /api/copy/pairs              # Create pair
+DELETE /api/copy/pairs/<id>         # Delete pair
+POST   /api/copy/pairs/<id>/toggle  # Toggle active/inactive
+GET    /api/copy/history            # Get history
+DELETE /api/copy/history            # Clear history
+GET    /events/copy-trades          # SSE real-time updates
+```
+
+#### EA Configuration
+
+**Master Mode:**
+```
+EnableMaster = true
+Master_ServerURL = "http://localhost:5000"
+Master_APIKey = "your-api-key-from-pair"
+Master_SendOnOpen = true
+Master_SendOnClose = true
+Master_SendOnModify = true
+```
+
+**Slave Mode:**
+```
+EnableSlave = true
+Slave_AutoLinkInstance = true
+Slave_InstanceRootPath = "C:\\MT5_Instances"
+Slave_FilePattern = "slave_command_*.json"
+Slave_PollingSeconds = 1
+```
+
+---
+
+###  Quick Setup
+
+#### Step 1: Add Master Account
+1. Go to **Copy Trading** page
+2. Click **"Add Master Account"**
+3. Enter account number and nickname
+4. Ensure status is **Online**
+
+#### Step 2: Add Slave Account
+1. Click **"Add Slave Account"** or **"Add from server"**
+2. Enter/select account
+3. Verify status is **Online**
+
+#### Step 3: Create Copy Pair
+1. Click **"Create New Pair"**
+2. Select Master and Slave accounts
+3. Configure:
+   - Auto Map Symbol
+   - Auto Map Volume
+   - Copy TP/SL
+   - Volume Mode (Fixed/Multiply/Percent)
+   - Multiplier
+4. Copy the generated **API Key**
+
+#### Step 4: Configure EAs
+
+**Master EA:**
+- Paste API key into `Master_APIKey`
+- Set `Master_ServerURL`
+- Enable send on open/close/modify
+
+**Slave EA:**
+- Set `Slave_InstanceRootPath`
+- Enable auto link instance
+
+#### Step 5: Test
+1. Open position on Master
+2. Watch Copy History for events
+3. Verify position on Slave with correct volume and symbol
+
+---
+
+###  Usage Examples
+
+**Fixed Volume:**
+```
+Settings: Fixed, 0.01
+Master 2.0 lots → Slave 0.01 lots
+```
+
+**Multiply Mode:**
+```
+Settings: Multiply, 0.5
+Master 1.0 lot → Slave 0.5 lots
+Master 2.0 lots → Slave 1.0 lot
+```
+
+**Percent Mode:**
+```
+Settings: Percent, 2.0, Master $10k, Slave $5k
+Master 1.0 lot → Slave (5000/10000) × 1.0 × 2.0 = 1.0 lot
+```
+
+**Symbol Mapping:**
+```
+Settings: Auto Map Symbol enabled
+Master XAUUSD → Slave GOLD (auto-converted)
+```
+
+---
+
+###  Troubleshooting
+
+**Slave doesn't execute:**
+- Verify pair status is Active
+- Check Slave account is Online
+- Confirm Slave EA shows `[SLAVE] FileBridge ready`
+- Check `Slave_InstanceRootPath` is correct
+
+**Wrong volume:**
+- Review Volume Mode and Multiplier
+- For Percent mode, verify balances detected
+- Check logs for volume calculation
+
+**Symbol not found:**
+- Enable Auto Map Symbol
+- Verify symbol in Slave's Market Watch
+- Add custom mapping if needed
+
+**API Key Invalid:**
+- Copy exact key from UI (no spaces)
+- Paste into Master EA's `Master_APIKey`
+- Restart Master EA
+
+---
+
+###  Advanced Features
+
+#### Multiple Configurations
+
+**One Master → Multiple Slaves:**
+```
+Master (11111111)
+  ├─ Slave (22222222) - Fixed 0.01
+  ├─ Slave (33333333) - Multiply 0.5x
+  └─ Slave (44444444) - Percent 2.0x
+```
+
+**Multiple Masters → One Slave:**
+```
+Slave (22222222)
+  ├─ Master (11111111) - API Key A
+  └─ Master (55555555) - API Key B
+```
+
+**Cascade (Master → Slave → Slave):**
+```
+Master (11111111)
+  └─ Slave (22222222) [EnableMaster=true]
+       └─ Slave (33333333)
+```
+
+#### Network Options
+
+**Local (Recommended):**
+```
+Master_ServerURL = "http://192.168.1.100:5000"
+```
+
+**External (Cloudflare):**
+```
+Master_ServerURL = "https://trading.yourdomain.com"
+```
+
+---
+
+###  New Data Files
+
+```
+data/copy_pairs.json        # Copy pair definitions & API keys
+data/copy_history.json      # Last 1000 copy events
+```
+
+**Include in backups!**
+
+---
+
+###  Migration from v1.0
+
+1. Update code to v2.0
+2. Run `python server.py`
+3. Server auto-creates new files
+4. All existing data preserved
+5. No manual migration needed
+
+---
+
+###  Copy Trading API
+
+#### POST /api/copy/trade
+
+**Request:**
+```json
+{
+  "api_key": "your-api-key",
+  "event": "deal_add",
+  "order_id": "order_12345",
+  "account": "11111111",
+  "symbol": "XAUUSD",
+  "type": "BUY",
+  "volume": 1.0,
+  "tp": 2450.0,
+  "sl": 2400.0
+}
+```
+
+**Events:** `deal_add`, `deal_close`, `position_modify`
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Signal processed",
+  "pairs_processed": 1
+}
+```
+
+---
+
+**Version 2.0.0 - Copy Trading Update**  
+**Release Date**: October 24, 2025  
+**Compatible**: MT5 Build 3801+, Python 3.8+, Windows 10/11  
+**EA Version**: All-in-One Trading EA v2.2
+
+---
